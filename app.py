@@ -1,13 +1,15 @@
 import streamlit as st
-import pandas as pd
 from ai_helper import process_excel, fleet_summary, compare_files, generate_insights
 
 st.set_page_config(page_title="Fleet AI", layout="wide")
 
 st.title("🚛 Fleet AI Intelligence System")
 
-# Upload files
-files = st.file_uploader("Upload Excel files", type=["xlsx"], accept_multiple_files=True)
+files = st.file_uploader(
+    "Upload Excel files",
+    type=["xlsx"],
+    accept_multiple_files=True
+)
 
 if files:
 
@@ -15,10 +17,11 @@ if files:
 
     for file in files:
         df = process_excel(file)
+
         if df is not None:
             dataframes.append(df)
 
-    # SINGLE FILE ANALYSIS
+    # SINGLE FILE
     if len(dataframes) == 1:
         df = dataframes[0]
 
@@ -29,10 +32,12 @@ if files:
         st.write(summary)
 
         st.subheader("🤖 AI Insights")
+
         insights = generate_insights(summary)
+
         st.write(insights)
 
-    # MULTIPLE FILE COMPARISON
+    # MULTIPLE FILES
     elif len(dataframes) >= 2:
         st.subheader("📊 Comparison")
 
@@ -43,7 +48,8 @@ if files:
         st.subheader("🤖 AI Insights")
 
         insights = generate_insights(result["file1"])
+
         st.write(insights)
 
 else:
-    st.info("Upload your Excel files to start")
+    st.info("Upload Excel files to start")
