@@ -1,153 +1,100 @@
 import openpyxl
 import re
+from openai import OpenAI
+import streamlit as st
 
-SHEET_NAME = "March"
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
 def clean_vehicle(v):
-    if isinstance(v, str):
-        return v.replace(" ", "").upper()
-    return ""
+    return str(v).replace(" ", "").upper()
 
 
-def extract_vehicle(text):
-    text = text.upper().replace(" ", "")
-    match = re.findall(r'[A-Z]{2}[0-9]{2}[A-Z]{2}[0-9]{4}', text)
-    if match:
-        return match[0]
-    return None
+def process_file(file):
+    wb = openpyxl.load_workbook(file)
+    ws = wb.active
 
+    vehicle_col, trips_col = None, None
 
-def fleet_summary(uploaded_file):
-    wb = openpyxl.load_workbook(uploaded_file)
-    ws = wb[SHEET_NAME]
-
-    vehicle_col = None
-    trips_col = None
-
-    # find columns
     for row in ws.iter_rows(min_row=1, max_row=10):
         for i, cell in enumerate(row):
             if cell.value:
-                text = str(cell.value).upper()
-                if "VEHICLE" in text:
+                t = str(cell.value).upper()
+                if "VEHICLE" in t:
                     vehicle_col = i
-                if "TRIP" in text:
+                if "TRIP" in t:
                     trips_col = i
-
-    if vehicle_col is None or trips_col is None:
-        return {
-            "total_vehicles": 0,
-            "total_trips": 0,
-            "total_idle": 0,
-            "avg_trips": 0,
-            "avg_idle": 0,
-            "efficiency": 0,
-            "vehicle_data": {}
-        }
 
     data = {}
 
     for row in ws.iter_rows(min_row=2):
-
-        vehicle_raw = row[vehicle_col].value
-
-        if not vehicle_raw:
+        vehicle = row[vehicle_col].value
+        if not vehicle:
             continue
 
-        vehicle = clean_vehicle(vehicle_raw)
-
+        vehicle = clean_vehicle(vehicle)
         if not vehicle.startswith("OD"):
             continue
 
-        # trips
-        trips_cell = row[trips_col].value
         try:
-            trips = int(trips_cell)
+            trips = int(row[trips_col].value)
         except:
             trips = 0
 
         idle = 0
-
         for i, cell in enumerate(row):
-            if i == vehicle_col or i == trips_col:
+            if i in [vehicle_col, trips_col]:
                 continue
-
-            value = str(cell.value).upper() if cell.value else ""
-
-            if "WAIT" in value or "PARK" in value:
+            val = str(cell.value).upper() if cell.value else ""
+            if "WAIT" in val or "PARK" in val:
                 idle += 1
 
         data[vehicle] = {"trips": trips, "idle": idle}
 
-    total_vehicles = len(data)
-
-    if total_vehicles == 0:
-        return {
-            "total_vehicles": 0,
-            "total_trips": 0,
-            "total_idle": 0,
-            "avg_trips": 0,
-            "avg_idle": 0,
-            "efficiency": 0,
-            "vehicle_data": {}
-        }
-
-    total_trips = sum(v["trips"] for v in data.values())
-    total_idle = sum(v["idle"] for v in data.values())
-
-    avg_trips = round(total_trips / total_vehicles, 2)
-    avg_idle = round(total_idle / total_vehicles, 2)
-
-    efficiency = round(total_trips / (total_trips + total_idle), 3)
-
-    return {
-        "total_vehicles": total_vehicles,
-        "total_trips": total_trips,
-        "total_idle": total_idle,
-        "avg_trips": avg_trips,
-        "avg_idle": avg_idle,
-        "efficiency": efficiency,
-        "vehicle_data": data
-    }
+    return data
 
 
-def ask_ai(user_input, uploaded_file):
-    vehicle = extract_vehicle(user_input)
+def merge(files):
+    combined = {}
 
-    if not vehicle:
-        return "I could not detect vehicle number."
+    for f in files:
+        d = process_file(f)
+        for v, stats in d.items():
+            if v not in combined:
+                combined[v] = {"trips": 0, "idle": 0}
+            combined[v]["trips"] += stats["trips"]
+            combined[v]["idle"] += stats["idle"]
 
-    summary = fleet_summary(uploaded_file)
-    data = summary["vehicle_data"]
+    return combined
 
-    if vehicle not in data:
-        return "Vehicle not found."
 
-    trips = data[vehicle]["trips"]
-    idle = data[vehicle]["idle"]
+def ask_ai(question, files):
+    data = merge(files)
 
-    if (trips + idle) == 0:
-        efficiency = 0
-    else:
-        efficiency = round(trips / (trips + idle), 2)
+    # convert data to readable text
+    context = "\n".join([
+        f"{v}: trips={d['trips']}, idle={d['idle']}"
+        for v, d in data.items()
+    ])
 
-    return f"""
-Vehicle: {vehicle}
+    prompt = f"""
+You are a fleet management analyst.
 
-Trips: {trips}
-Idle Days: {idle}
-Efficiency: {efficiency}
+Data:
+{context}
+
+User question:
+{question}
+
+Answer like a professional analyst:
+- give insights
+- identify problems
+- suggest actions
 """
 
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
 
-def get_top_worst(uploaded_file):
-    summary = fleet_summary(uploaded_file)
-    data = summary["vehicle_data"]
-
-    sorted_data = sorted(data.items(), key=lambda x: x[1]["trips"], reverse=True)
-
-    top = sorted_data[:5]
-    worst = sorted_data[-5:]
-
-    return top, worst
+    return response.choices[0].message.content
