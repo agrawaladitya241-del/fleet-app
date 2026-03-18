@@ -1,96 +1,72 @@
-import openpyxl
-import re
+import pandas as pd
 from openai import OpenAI
 import streamlit as st
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
+def process_excel(uploaded_file):
+    df = pd.read_excel(uploaded_file)
 
-def clean_vehicle(v):
-    return str(v).replace(" ", "").upper()
+    df.columns = df.columns.str.strip()
 
+    vehicle_col = df.columns[0]
+    trip_col = None
 
-def process_file(file):
-    wb = openpyxl.load_workbook(file)
-    ws = wb.active
+    for col in df.columns:
+        if "trip" in col.lower():
+            trip_col = col
 
-    vehicle_col, trips_col = None, None
+    if trip_col is None:
+        return None
 
-    for row in ws.iter_rows(min_row=1, max_row=10):
-        for i, cell in enumerate(row):
-            if cell.value:
-                t = str(cell.value).upper()
-                if "VEHICLE" in t:
-                    vehicle_col = i
-                if "TRIP" in t:
-                    trips_col = i
+    df = df[[vehicle_col, trip_col]]
+    df.columns = ["vehicle", "trips"]
 
-    data = {}
+    df["trips"] = pd.to_numeric(df["trips"], errors="coerce").fillna(0)
 
-    for row in ws.iter_rows(min_row=2):
-        vehicle = row[vehicle_col].value
-        if not vehicle:
-            continue
-
-        vehicle = clean_vehicle(vehicle)
-        if not vehicle.startswith("OD"):
-            continue
-
-        try:
-            trips = int(row[trips_col].value)
-        except:
-            trips = 0
-
-        idle = 0
-        for i, cell in enumerate(row):
-            if i in [vehicle_col, trips_col]:
-                continue
-            val = str(cell.value).upper() if cell.value else ""
-            if "WAIT" in val or "PARK" in val:
-                idle += 1
-
-        data[vehicle] = {"trips": trips, "idle": idle}
-
-    return data
+    return df
 
 
-def merge(files):
-    combined = {}
+def fleet_summary(df):
+    total_vehicles = len(df)
+    total_trips = int(df["trips"].sum())
 
-    for f in files:
-        d = process_file(f)
-        for v, stats in d.items():
-            if v not in combined:
-                combined[v] = {"trips": 0, "idle": 0}
-            combined[v]["trips"] += stats["trips"]
-            combined[v]["idle"] += stats["idle"]
+    total_idle = int((df["trips"] == 0).sum())
 
-    return combined
+    avg_trips = round(total_trips / total_vehicles, 2) if total_vehicles > 0 else 0
+
+    efficiency = round(total_trips / (total_trips + total_idle), 2) if (total_trips + total_idle) > 0 else 0
+
+    return {
+        "total_vehicles": total_vehicles,
+        "total_trips": total_trips,
+        "total_idle": total_idle,
+        "avg_trips": avg_trips,
+        "efficiency": efficiency
+    }
 
 
-def ask_ai(question, files):
-    data = merge(files)
+def compare_files(df1, df2):
+    summary1 = fleet_summary(df1)
+    summary2 = fleet_summary(df2)
 
-    # convert data to readable text
-    context = "\n".join([
-        f"{v}: trips={d['trips']}, idle={d['idle']}"
-        for v, d in data.items()
-    ])
+    return {
+        "file1": summary1,
+        "file2": summary2
+    }
 
+
+def generate_insights(summary):
     prompt = f"""
-You are a fleet management analyst.
+    Fleet Summary:
+    Vehicles: {summary['total_vehicles']}
+    Trips: {summary['total_trips']}
+    Idle: {summary['total_idle']}
+    Avg Trips: {summary['avg_trips']}
+    Efficiency: {summary['efficiency']}
 
-Data:
-{context}
-
-User question:
-{question}
-
-Answer like a professional analyst:
-- give insights
-- identify problems
-- suggest actions
-"""
+    Give business insights and suggestions.
+    """
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
