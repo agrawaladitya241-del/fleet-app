@@ -1,76 +1,29 @@
 import streamlit as st
-import pandas as pd
-from ai_helper import ask_ai, fleet_summary, get_top_worst
+from ai_helper import fleet_summary, compare_files, generate_insights
 
-st.set_page_config(page_title="Fleet Dashboard", layout="wide")
+st.title("🚚 Fleet AI Intelligence System")
 
-# HEADER
-st.markdown("## 🚚 Fleet Performance Dashboard")
-st.markdown("---")
+files = st.file_uploader("Upload Excel files", type=["xlsx"], accept_multiple_files=True)
 
-# FILE UPLOAD
-uploaded_file = st.file_uploader("📂 Upload Daily Fleet Report", type=["xlsx"])
+if files:
 
-if uploaded_file:
+    summary = fleet_summary(files)
 
-    summary = fleet_summary(uploaded_file)
+    st.metric("Total Trips", summary["total_trips"])
+    st.metric("Total Idle", summary["total_idle"])
 
-    # KPI CARDS
-    col1, col2, col3, col4 = st.columns(4)
+    st.subheader("🧠 AI Insights")
+    st.success(generate_insights(summary))
 
-    col1.metric("Total Vehicles", summary["total_vehicles"])
-    col2.metric("Total Trips", summary["total_trips"])
-    col3.metric("Idle Days", summary["total_idle"])
-    col4.metric("Efficiency", summary["efficiency"])
+    if len(files) >= 2:
+        st.subheader("📊 Comparison")
 
-    st.markdown("---")
+        result = compare_files(files)
 
-    # AI QUERY
-    st.subheader("🤖 Vehicle Query")
+        st.write("Improved Trucks:")
+        for v, diff in result["improved"]:
+            st.write(f"{v} ↑ {diff}")
 
-    query = st.text_input("Ask about any vehicle")
-
-    if query:
-        answer = ask_ai(query, uploaded_file)
-        st.success(answer)
-
-    st.markdown("---")
-
-    # TOP & WORST
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("🏆 Top Trucks")
-        top, worst = get_top_worst(uploaded_file)
-        for v, stats in top:
-            st.write(f"{v} → Trips: {stats['trips']}")
-
-    with col2:
-        st.subheader("🐢 Underperforming Trucks")
-        for v, stats in worst:
-            st.write(f"{v} → Trips: {stats['trips']}")
-
-    st.markdown("---")
-
-    # GRAPH
-    st.subheader("📈 Trips vs Idle")
-
-    vehicles = []
-    trips = []
-    idle = []
-
-    for v, stats in summary["vehicle_data"].items():
-        vehicles.append(v)
-        trips.append(stats["trips"])
-        idle.append(stats["idle"])
-
-    df = pd.DataFrame({
-        "Vehicle": vehicles,
-        "Trips": trips,
-        "Idle": idle
-    })
-
-    st.bar_chart(df.set_index("Vehicle"))
-
-else:
-    st.info("Upload your daily Excel file to start")
+        st.write("Declined Trucks:")
+        for v, diff in result["declined"]:
+            st.write(f"{v} ↓ {diff}")
