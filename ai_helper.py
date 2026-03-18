@@ -2,19 +2,24 @@ import pandas as pd
 from openai import OpenAI
 import streamlit as st
 
+# OpenAI setup
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
 
 def process_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
 
-    df.columns = df.columns.str.strip()
+    # Clean column names safely
+    df.columns = [str(col).strip() for col in df.columns]
 
     vehicle_col = df.columns[0]
     trip_col = None
 
+    # Find trip column safely
     for col in df.columns:
-        if "trip" in col.lower():
+        if "trip" in str(col).lower():
             trip_col = col
+            break
 
     if trip_col is None:
         return None
@@ -30,12 +35,13 @@ def process_excel(uploaded_file):
 def fleet_summary(df):
     total_vehicles = len(df)
     total_trips = int(df["trips"].sum())
-
     total_idle = int((df["trips"] == 0).sum())
 
     avg_trips = round(total_trips / total_vehicles, 2) if total_vehicles > 0 else 0
 
-    efficiency = round(total_trips / (total_trips + total_idle), 2) if (total_trips + total_idle) > 0 else 0
+    efficiency = round(
+        total_trips / (total_trips + total_idle), 2
+    ) if (total_trips + total_idle) > 0 else 0
 
     return {
         "total_vehicles": total_vehicles,
@@ -58,14 +64,19 @@ def compare_files(df1, df2):
 
 def generate_insights(summary):
     prompt = f"""
-    Fleet Summary:
-    Vehicles: {summary['total_vehicles']}
-    Trips: {summary['total_trips']}
-    Idle: {summary['total_idle']}
+    You are a fleet operations expert.
+
+    Fleet Data:
+    Total Vehicles: {summary['total_vehicles']}
+    Total Trips: {summary['total_trips']}
+    Idle Vehicles: {summary['total_idle']}
     Avg Trips: {summary['avg_trips']}
     Efficiency: {summary['efficiency']}
 
-    Give business insights and suggestions.
+    Give:
+    1. Key problems
+    2. Performance insights
+    3. Actionable suggestions to improve fleet efficiency
     """
 
     response = client.chat.completions.create(
