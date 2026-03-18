@@ -1,29 +1,49 @@
 import streamlit as st
-from ai_helper import fleet_summary, compare_files, generate_insights
+import pandas as pd
+from ai_helper import process_excel, fleet_summary, compare_files, generate_insights
 
-st.title("🚚 Fleet AI Intelligence System")
+st.set_page_config(page_title="Fleet AI", layout="wide")
 
+st.title("🚛 Fleet AI Intelligence System")
+
+# Upload files
 files = st.file_uploader("Upload Excel files", type=["xlsx"], accept_multiple_files=True)
 
 if files:
 
-    summary = fleet_summary(files)
+    dataframes = []
 
-    st.metric("Total Trips", summary["total_trips"])
-    st.metric("Total Idle", summary["total_idle"])
+    for file in files:
+        df = process_excel(file)
+        if df is not None:
+            dataframes.append(df)
 
-    st.subheader("🧠 AI Insights")
-    st.success(generate_insights(summary))
+    # SINGLE FILE ANALYSIS
+    if len(dataframes) == 1:
+        df = dataframes[0]
 
-    if len(files) >= 2:
+        st.subheader("📊 Fleet Summary")
+
+        summary = fleet_summary(df)
+
+        st.write(summary)
+
+        st.subheader("🤖 AI Insights")
+        insights = generate_insights(summary)
+        st.write(insights)
+
+    # MULTIPLE FILE COMPARISON
+    elif len(dataframes) >= 2:
         st.subheader("📊 Comparison")
 
-        result = compare_files(files)
+        result = compare_files(dataframes[0], dataframes[1])
 
-        st.write("Improved Trucks:")
-        for v, diff in result["improved"]:
-            st.write(f"{v} ↑ {diff}")
+        st.write(result)
 
-        st.write("Declined Trucks:")
-        for v, diff in result["declined"]:
-            st.write(f"{v} ↓ {diff}")
+        st.subheader("🤖 AI Insights")
+
+        insights = generate_insights(result["file1"])
+        st.write(insights)
+
+else:
+    st.info("Upload your Excel files to start")
