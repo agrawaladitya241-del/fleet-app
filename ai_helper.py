@@ -2,37 +2,37 @@ import pandas as pd
 
 
 def process_excel(uploaded_file):
-    df = pd.read_excel(uploaded_file)
+    # 🔥 Read with header auto-detection fix
+    df = pd.read_excel(uploaded_file, header=0)
+
+    # Drop empty rows
+    df = df.dropna(how="all")
+
+    # Reset index
+    df = df.reset_index(drop=True)
 
     # Clean column names
     df.columns = [str(col).strip() for col in df.columns]
 
-    # Remove empty rows
-    df = df.dropna(how="all")
+    # DEBUG (important)
+    print("COLUMNS FOUND:", df.columns)
+
+    # Try to find Trip column
+    trip_col = None
+    for col in df.columns:
+        if "trip" in col.lower():
+            trip_col = col
+            break
+
+    # If not found → show error clearly
+    if trip_col is None:
+        raise Exception(f"Trip column not found. Columns detected: {df.columns}")
 
     # First column = vehicle
     vehicle_col = df.columns[0]
 
-    # 🔥 Find Trip column more intelligently
-    trip_col = None
-    for col in df.columns:
-        if str(col).strip().lower() in ["trip", "trips"]:
-            trip_col = col
-            break
-
-    # If still not found → TAKE LAST COLUMN (fallback)
-    if trip_col is None:
-        trip_col = df.columns[-1]
-
     df = df[[vehicle_col, trip_col]]
     df.columns = ["vehicle", "trips"]
-
-    # 🔥 FORCE CLEAN VALUES
-    df["trips"] = (
-        df["trips"]
-        .astype(str)
-        .str.extract(r"(\d+)")[0]   # extract numbers
-    )
 
     df["trips"] = pd.to_numeric(df["trips"], errors="coerce").fillna(0)
 
@@ -68,20 +68,12 @@ def compare_files(df1, df2):
 
 def generate_insights(summary):
     return f"""
-🚛 Fleet Performance Insights
+Fleet Summary:
 
-Total Vehicles: {summary['total_vehicles']}
-Total Trips: {summary['total_trips']}
-Idle Vehicles: {summary['total_idle']}
-Average Trips per Truck: {summary['avg_trips']}
-Efficiency: {summary['efficiency']}
+Vehicles: {summary['total_vehicles']}
+Trips: {summary['total_trips']}
+Idle: {summary['total_idle']}
 
-📊 Observations:
-- Fleet utilisation needs improvement
-- Idle trucks indicate inefficiency
-
-✅ Actions:
-- Reassign idle trucks
-- Balance workload
-- Improve dispatch planning
+Observation:
+Fleet utilisation needs improvement.
 """
