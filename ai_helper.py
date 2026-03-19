@@ -22,6 +22,7 @@ def process_file(uploaded_file):
     trips_col = None
     header_row = 1
 
+    # 🔍 Find columns + header row
     for i, row in enumerate(ws.iter_rows(min_row=1, max_row=15), start=1):
         for j, cell in enumerate(row):
             if cell.value:
@@ -38,6 +39,7 @@ def process_file(uploaded_file):
 
     data = {}
 
+    # 🔄 Process rows
     for row in ws.iter_rows(min_row=header_row + 1):
 
         vehicle_raw = row[vehicle_col].value
@@ -48,25 +50,47 @@ def process_file(uploaded_file):
         if not vehicle.startswith("OD"):
             continue
 
+        # Trips
         try:
             trips = int(row[trips_col].value)
         except:
             trips = 0
 
+        # Status counters
         idle = 0
+        dh = 0
+        dp = 0
+        ac = 0
+
         for i, cell in enumerate(row):
             if i in [vehicle_col, trips_col]:
                 continue
 
             val = str(cell.value).upper() if cell.value else ""
+
             if "WAIT" in val or "PARK" in val:
                 idle += 1
+            elif "DH" in val:
+                dh += 1
+            elif "DP" in val:
+                dp += 1
+            elif "AC" in val:
+                ac += 1
 
         if vehicle not in data:
-            data[vehicle] = {"trips": 0, "idle": 0}
+            data[vehicle] = {
+                "trips": 0,
+                "idle": 0,
+                "dh": 0,
+                "dp": 0,
+                "ac": 0
+            }
 
         data[vehicle]["trips"] += trips
         data[vehicle]["idle"] += idle
+        data[vehicle]["dh"] += dh
+        data[vehicle]["dp"] += dp
+        data[vehicle]["ac"] += ac
 
     return data
 
@@ -79,10 +103,19 @@ def merge_files(files):
 
         for v, stats in file_data.items():
             if v not in final_data:
-                final_data[v] = {"trips": 0, "idle": 0}
+                final_data[v] = {
+                    "trips": 0,
+                    "idle": 0,
+                    "dh": 0,
+                    "dp": 0,
+                    "ac": 0
+                }
 
             final_data[v]["trips"] += stats["trips"]
             final_data[v]["idle"] += stats["idle"]
+            final_data[v]["dh"] += stats["dh"]
+            final_data[v]["dp"] += stats["dp"]
+            final_data[v]["ac"] += stats["ac"]
 
     return final_data
 
@@ -93,16 +126,24 @@ def fleet_summary(files):
     total_vehicles = len(data)
     total_trips = sum(v["trips"] for v in data.values())
     total_idle = sum(v["idle"] for v in data.values())
+    total_dh = sum(v["dh"] for v in data.values())
+    total_dp = sum(v["dp"] for v in data.values())
+    total_ac = sum(v["ac"] for v in data.values())
 
     avg_trips = round(total_trips / total_vehicles, 2) if total_vehicles else 0
     avg_idle = round(total_idle / total_vehicles, 2) if total_vehicles else 0
 
-    efficiency = round(total_trips / (total_trips + total_idle), 3) if (total_trips + total_idle) else 0
+    efficiency = round(
+        total_trips / (total_trips + total_idle), 3
+    ) if (total_trips + total_idle) else 0
 
     return {
         "total_vehicles": total_vehicles,
         "total_trips": total_trips,
         "total_idle": total_idle,
+        "total_dh": total_dh,
+        "total_dp": total_dp,
+        "total_ac": total_ac,
         "avg_trips": avg_trips,
         "avg_idle": avg_idle,
         "efficiency": efficiency,
@@ -119,13 +160,22 @@ def smart_query(user_input, files):
     vehicle = extract_vehicle(user_input)
     if vehicle and vehicle in data:
         d = data[vehicle]
-        return f"{vehicle} → Trips: {d['trips']}, Idle: {d['idle']}"
+        return f"{vehicle} → Trips: {d['trips']}, Idle: {d['idle']}, DH: {d['dh']}, DP: {d['dp']}, AC: {d['ac']}"
 
     if "total" in text and "trip" in text:
         return f"Total trips: {summary['total_trips']}"
 
     if "idle" in text:
         return f"Total idle: {summary['total_idle']}"
+
+    if "driver home" in text or "dh" in text:
+        return f"Total DH days: {summary['total_dh']}"
+
+    if "driver problem" in text or "dp" in text:
+        return f"Total DP days: {summary['total_dp']}"
+
+    if "accident" in text or "ac" in text:
+        return f"Total AC days: {summary['total_ac']}"
 
     if "best" in text or "top" in text:
         top = sorted(data.items(), key=lambda x: x[1]["trips"], reverse=True)[:5]
@@ -135,4 +185,4 @@ def smart_query(user_input, files):
         worst = sorted(data.items(), key=lambda x: x[1]["trips"])[:5]
         return "\n".join([f"{v} → {d['trips']} trips" for v, d in worst])
 
-    return "Try asking about trips, idle, or vehicle number"
+    return "Try asking about trips, idle, DH, DP, AC or vehicle number."
