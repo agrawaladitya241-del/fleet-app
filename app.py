@@ -18,7 +18,9 @@ if files:
     for file in files:
         df = process_excel(file)
 
-        if df is not None:
+        if df is None:
+            st.error("❌ 'Trip' column not found in file")
+        else:
             dataframes.append(df)
 
     # SINGLE FILE
