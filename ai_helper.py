@@ -14,13 +14,13 @@ def extract_vehicle(text):
     return match[0] if match else None
 
 
-# 🔥 EXACT EXCEL FIND LOGIC
+# 🔥 Excel FIND-level counting
 def count_keyword_in_sheet(uploaded_file, keyword):
     wb = openpyxl.load_workbook(uploaded_file)
     ws = wb.active
 
-    count = 0
     keyword = keyword.upper()
+    count = 0
 
     for row in ws.iter_rows():
         for cell in row:
@@ -39,7 +39,7 @@ def process_file(uploaded_file):
     trips_col = None
     header_row = 1
 
-    # Find columns
+    # Detect columns
     for i, row in enumerate(ws.iter_rows(min_row=1, max_row=15), start=1):
         for j, cell in enumerate(row):
             if cell.value:
@@ -75,6 +75,7 @@ def process_file(uploaded_file):
         dh = 0
         dp = 0
         ac = 0
+        rm = 0
 
         for i, cell in enumerate(row):
             if i in [vehicle_col, trips_col]:
@@ -90,6 +91,8 @@ def process_file(uploaded_file):
                 dp += 1
             elif "AC" in val:
                 ac += 1
+            elif "RM" in val:
+                rm += 1
 
         if vehicle not in data:
             data[vehicle] = {
@@ -97,7 +100,8 @@ def process_file(uploaded_file):
                 "idle": 0,
                 "dh": 0,
                 "dp": 0,
-                "ac": 0
+                "ac": 0,
+                "rm": 0
             }
 
         data[vehicle]["trips"] += trips
@@ -105,6 +109,7 @@ def process_file(uploaded_file):
         data[vehicle]["dh"] += dh
         data[vehicle]["dp"] += dp
         data[vehicle]["ac"] += ac
+        data[vehicle]["rm"] += rm
 
     return data
 
@@ -122,14 +127,12 @@ def merge_files(files):
                     "idle": 0,
                     "dh": 0,
                     "dp": 0,
-                    "ac": 0
+                    "ac": 0,
+                    "rm": 0
                 }
 
-            final_data[v]["trips"] += stats["trips"]
-            final_data[v]["idle"] += stats["idle"]
-            final_data[v]["dh"] += stats["dh"]
-            final_data[v]["dp"] += stats["dp"]
-            final_data[v]["ac"] += stats["ac"]
+            for key in stats:
+                final_data[v][key] += stats[key]
 
     return final_data
 
@@ -137,15 +140,17 @@ def merge_files(files):
 def fleet_summary(files):
     data = merge_files(files)
 
-    # 🔥 VEHICLE BASED
     total_vehicles = len(data)
     total_trips = sum(v["trips"] for v in data.values())
     total_idle = sum(v["idle"] for v in data.values())
 
-    # 🔥 EXCEL FIND BASED (ACCURATE)
+    # 🔥 Excel-find accurate totals
     total_dh = sum(count_keyword_in_sheet(f, "DH") for f in files)
     total_dp = sum(count_keyword_in_sheet(f, "DP") for f in files)
     total_ac = sum(count_keyword_in_sheet(f, "AC") for f in files)
+    total_rm = sum(count_keyword_in_sheet(f, "RM") for f in files)
+    total_park = sum(count_keyword_in_sheet(f, "PARK") for f in files)
+    total_wait = sum(count_keyword_in_sheet(f, "WAIT") for f in files)
 
     avg_trips = round(total_trips / total_vehicles, 2) if total_vehicles else 0
 
@@ -160,6 +165,9 @@ def fleet_summary(files):
         "total_dh": total_dh,
         "total_dp": total_dp,
         "total_ac": total_ac,
+        "total_rm": total_rm,
+        "total_park": total_park,
+        "total_wait": total_wait,
         "avg_trips": avg_trips,
         "efficiency": efficiency,
         "vehicle_data": data
@@ -172,32 +180,37 @@ def smart_query(user_input, files):
 
     text = user_input.lower()
 
+    # Vehicle query
     vehicle = extract_vehicle(user_input)
     if vehicle and vehicle in data:
         d = data[vehicle]
-        return f"{vehicle} → Trips: {d['trips']}, Idle: {d['idle']}, DH: {d['dh']}, DP: {d['dp']}, AC: {d['ac']}"
+        return f"{vehicle} → Trips:{d['trips']} Idle:{d['idle']} DH:{d['dh']} DP:{d['dp']} AC:{d['ac']} RM:{d['rm']}"
 
-    if "total" in text and "trip" in text:
-        return f"Total trips: {summary['total_trips']}"
+    # Smart mapping
+    mapping = {
+        "dp": ["driver problem", "dp"],
+        "dh": ["driver home", "dh"],
+        "ac": ["accident", "ac"],
+        "rm": ["repair", "maintenance", "rm"],
+        "park": ["parking", "park"],
+        "wait": ["waiting", "wait"]
+    }
 
-    if "idle" in text:
-        return f"Total idle: {summary['total_idle']}"
+    for key, words in mapping.items():
+        for w in words:
+            if w in text:
+                total = summary.get(f"total_{key}", 0)
+                return f"{key.upper()} total: {total}"
 
-    if "dh" in text or "driver home" in text:
-        return f"Total DH days: {summary['total_dh']}"
+    # fallback keyword search
+    words = text.split()
+    ignore = {"how", "many", "days", "is", "are", "the", "in", "of"}
 
-    if "dp" in text or "driver problem" in text:
-        return f"Total DP days: {summary['total_dp']}"
+    for word in words:
+        if word not in ignore:
+            keyword = word.upper()
+            total = sum(count_keyword_in_sheet(f, keyword) for f in files)
+            if total > 0:
+                return f"{keyword} appears {total} times"
 
-    if "ac" in text or "accident" in text:
-        return f"Total AC days: {summary['total_ac']}"
-
-    if "best" in text or "top" in text:
-        top = sorted(data.items(), key=lambda x: x[1]["trips"], reverse=True)[:5]
-        return "\n".join([f"{v} → {d['trips']} trips" for v, d in top])
-
-    if "worst" in text or "low" in text:
-        worst = sorted(data.items(), key=lambda x: x[1]["trips"])[:5]
-        return "\n".join([f"{v} → {d['trips']} trips" for v, d in worst])
-
-    return "Ask about trips, idle, DH, DP, AC or vehicle number."
+    return "Ask anything about fleet data"
