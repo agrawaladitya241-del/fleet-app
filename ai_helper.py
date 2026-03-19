@@ -9,20 +9,20 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 def process_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
 
-    # Clean column names safely
+    # Clean column names
     df.columns = [str(col).strip() for col in df.columns]
 
+    # Remove empty rows
+    df = df.dropna(how="all")
+
+    # Find vehicle column (first column)
     vehicle_col = df.columns[0]
-    trip_col = None
 
-    # Find trip column safely
-    for col in df.columns:
-        if "trip" in str(col).lower():
-            trip_col = col
-            break
-
-    if trip_col is None:
+    # Find Trip column EXACTLY
+    if "Trip" not in df.columns:
         return None
+
+    trip_col = "Trip"
 
     df = df[[vehicle_col, trip_col]]
     df.columns = ["vehicle", "trips"]
