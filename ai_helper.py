@@ -14,7 +14,24 @@ def extract_vehicle(text):
     return match[0] if match else None
 
 
-# 🔥 Excel FIND-level counting
+# 🔥 NEW: Partial vehicle match (last 4 digits)
+def find_vehicle_by_partial(data, user_input):
+    text = user_input.replace(" ", "")
+    match = re.findall(r'\d{4}', text)
+
+    if not match:
+        return None
+
+    last_digits = match[0]
+
+    for vehicle in data.keys():
+        if vehicle.endswith(last_digits):
+            return vehicle
+
+    return None
+
+
+# 🔥 Excel Find-level counting
 def count_keyword_in_sheet(uploaded_file, keyword):
     wb = openpyxl.load_workbook(uploaded_file)
     ws = wb.active
@@ -144,13 +161,11 @@ def fleet_summary(files):
     total_trips = sum(v["trips"] for v in data.values())
     total_idle = sum(v["idle"] for v in data.values())
 
-    # 🔥 Excel-find accurate totals
+    # Excel Find accurate totals
     total_dh = sum(count_keyword_in_sheet(f, "DH") for f in files)
     total_dp = sum(count_keyword_in_sheet(f, "DP") for f in files)
     total_ac = sum(count_keyword_in_sheet(f, "AC") for f in files)
     total_rm = sum(count_keyword_in_sheet(f, "RM") for f in files)
-    total_park = sum(count_keyword_in_sheet(f, "PARK") for f in files)
-    total_wait = sum(count_keyword_in_sheet(f, "WAIT") for f in files)
 
     avg_trips = round(total_trips / total_vehicles, 2) if total_vehicles else 0
 
@@ -166,8 +181,6 @@ def fleet_summary(files):
         "total_dp": total_dp,
         "total_ac": total_ac,
         "total_rm": total_rm,
-        "total_park": total_park,
-        "total_wait": total_wait,
         "avg_trips": avg_trips,
         "efficiency": efficiency,
         "vehicle_data": data
@@ -180,11 +193,23 @@ def smart_query(user_input, files):
 
     text = user_input.lower()
 
-    # Vehicle query
+    # FULL or PARTIAL vehicle detection
     vehicle = extract_vehicle(user_input)
+
+    if not vehicle:
+        vehicle = find_vehicle_by_partial(data, user_input)
+
     if vehicle and vehicle in data:
         d = data[vehicle]
-        return f"{vehicle} → Trips:{d['trips']} Idle:{d['idle']} DH:{d['dh']} DP:{d['dp']} AC:{d['ac']} RM:{d['rm']}"
+        return f"""
+{vehicle} Status:
+Trips: {d['trips']}
+Idle: {d['idle']}
+Driver Home (DH): {d['dh']}
+Driver Problem (DP): {d['dp']}
+Accident (AC): {d['ac']}
+Repair/Maintenance (RM): {d['rm']}
+"""
 
     # Smart mapping
     mapping = {
@@ -204,7 +229,7 @@ def smart_query(user_input, files):
 
     # fallback keyword search
     words = text.split()
-    ignore = {"how", "many", "days", "is", "are", "the", "in", "of"}
+    ignore = {"how", "many", "days", "is", "are", "the", "in", "of", "for"}
 
     for word in words:
         if word not in ignore:
