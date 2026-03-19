@@ -1,95 +1,138 @@
-import pandas as pd
+import openpyxl
+import re
 
 
-def process_excel(uploaded_file):
-    # Read WITHOUT header assumption
-    df = pd.read_excel(uploaded_file, header=None)
-
-    # 🔥 Find the row where "Trip" exists
-    header_row = None
-
-    for i in range(len(df)):
-        row_values = df.iloc[i].astype(str).str.lower().tolist()
-        if any("trip" in val for val in row_values):
-            header_row = i
-            break
-
-    if header_row is None:
-        raise Exception("❌ Could not find 'Trip' column in file")
-
-    # 🔥 Re-read with correct header
-    df = pd.read_excel(uploaded_file, header=header_row)
-
-    # Clean columns
-    df.columns = [str(col).strip() for col in df.columns]
-
-    # Remove empty rows
-    df = df.dropna(how="all")
-
-    # Find trip column
-    trip_col = None
-    for col in df.columns:
-        if "trip" in col.lower():
-            trip_col = col
-            break
-
-    if trip_col is None:
-        raise Exception(f"Trip column not found. Columns: {df.columns}")
-
-    # First column = vehicle
-    vehicle_col = df.columns[0]
-
-    df = df[[vehicle_col, trip_col]]
-    df.columns = ["vehicle", "trips"]
-
-    # Clean values
-    df["trips"] = pd.to_numeric(df["trips"], errors="coerce").fillna(0)
-
-    return df
+def clean_vehicle(v):
+    if isinstance(v, str):
+        return v.replace(" ", "").upper()
+    return ""
 
 
-def fleet_summary(df):
-    total_vehicles = len(df)
-    total_trips = int(df["trips"].sum())
-    total_idle = int((df["trips"] == 0).sum())
+def extract_vehicle(text):
+    text = text.upper().replace(" ", "")
+    match = re.findall(r'[A-Z]{2}[0-9]{2}[A-Z]{2}[0-9]{4}', text)
+    return match[0] if match else None
 
-    avg_trips = round(total_trips / total_vehicles, 2) if total_vehicles > 0 else 0
 
-    efficiency = round(
-        total_trips / (total_trips + total_idle), 2
-    ) if (total_trips + total_idle) > 0 else 0
+def process_file(uploaded_file):
+    wb = openpyxl.load_workbook(uploaded_file)
+    ws = wb.active
+
+    vehicle_col = None
+    trips_col = None
+
+    # find columns
+    for row in ws.iter_rows(min_row=1, max_row=10):
+        for i, cell in enumerate(row):
+            if cell.value:
+                text = str(cell.value).upper()
+                if "VEHICLE" in text:
+                    vehicle_col = i
+                if "TRIP" in text:
+                    trips_col = i
+
+    data = {}
+
+    if vehicle_col is None or trips_col is None:
+        return data
+
+    for row in ws.iter_rows(min_row=2):
+
+        vehicle_raw = row[vehicle_col].value
+        if not vehicle_raw:
+            continue
+
+        vehicle = clean_vehicle(vehicle_raw)
+        if not vehicle.startswith("OD"):
+            continue
+
+        try:
+            trips = int(row[trips_col].value)
+        except:
+            trips = 0
+
+        idle = 0
+        for i, cell in enumerate(row):
+            if i in [vehicle_col, trips_col]:
+                continue
+
+            val = str(cell.value).upper() if cell.value else ""
+            if "WAIT" in val or "PARK" in val:
+                idle += 1
+
+        if vehicle not in data:
+            data[vehicle] = {"trips": 0, "idle": 0}
+
+        data[vehicle]["trips"] += trips
+        data[vehicle]["idle"] += idle
+
+    return data
+
+
+def merge_files(files):
+    final_data = {}
+
+    for f in files:
+        file_data = process_file(f)
+
+        for v, stats in file_data.items():
+            if v not in final_data:
+                final_data[v] = {"trips": 0, "idle": 0}
+
+            final_data[v]["trips"] += stats["trips"]
+            final_data[v]["idle"] += stats["idle"]
+
+    return final_data
+
+
+def fleet_summary(files):
+    data = merge_files(files)
+
+    total_vehicles = len(data)
+    total_trips = sum(v["trips"] for v in data.values())
+    total_idle = sum(v["idle"] for v in data.values())
+
+    avg_trips = round(total_trips / total_vehicles, 2) if total_vehicles else 0
+    avg_idle = round(total_idle / total_vehicles, 2) if total_vehicles else 0
+
+    efficiency = round(total_trips / (total_trips + total_idle), 3) if (total_trips + total_idle) else 0
 
     return {
         "total_vehicles": total_vehicles,
         "total_trips": total_trips,
         "total_idle": total_idle,
         "avg_trips": avg_trips,
-        "efficiency": efficiency
+        "avg_idle": avg_idle,
+        "efficiency": efficiency,
+        "vehicle_data": data
     }
 
 
-def compare_files(df1, df2):
-    return {
-        "file1": fleet_summary(df1),
-        "file2": fleet_summary(df2)
-    }
+def smart_query(user_input, files):
+    summary = fleet_summary(files)
+    data = summary["vehicle_data"]
 
+    text = user_input.lower()
 
-def generate_insights(summary):
-    return f"""
-🚛 Fleet Performance Insights
+    # vehicle specific
+    vehicle = extract_vehicle(user_input)
+    if vehicle and vehicle in data:
+        d = data[vehicle]
+        return f"{vehicle} → Trips: {d['trips']}, Idle: {d['idle']}"
 
-Total Vehicles: {summary['total_vehicles']}
-Total Trips: {summary['total_trips']}
-Idle Vehicles: {summary['total_idle']}
-Average Trips per Truck: {summary['avg_trips']}
-Efficiency: {summary['efficiency']}
+    # natural queries
+    if "total" in text and "trip" in text:
+        return f"Total trips: {summary['total_trips']}"
 
-📊 Observations:
-- Fleet utilisation needs improvement
-- Idle trucks indicate inefficiency
+    if "idle" in text:
+        return f"Total idle days: {summary['total_idle']}"
 
-✅ Suggestions:
-- Reassign idle trucks
-- Improve dispatch planning
-"""
+    if "best" in text or "top" in text:
+        top = sorted(data.items(), key=lambda x: x[1]["trips"], reverse=True)[:5]
+        return "\n".join([f"{v} → {d['trips']} trips" for v, d in top])
+
+    if "worst" in text or "low" in text:
+        worst = sorted(data.items(), key=lambda x: x[1]["trips"])[:5]
+        return "\n".join([f"{v} → {d['trips']} trips" for v, d in worst])
+
+    return "Try asking about trips, idle, best or a vehicle number."
