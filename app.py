@@ -1,62 +1,43 @@
 import streamlit as st
-from ai_helper import process_excel, fleet_summary, compare_files, generate_insights
+import pandas as pd
+from ai_helper import smart_query, fleet_summary
 
 st.set_page_config(page_title="Fleet AI", layout="wide")
 
-st.title("🚛 Fleet AI Intelligence System")
+st.title("🚚 Fleet Intelligence Dashboard")
 
-files = st.file_uploader(
-    "Upload Excel files",
-    type=["xlsx"],
-    accept_multiple_files=True
-)
+# MULTIPLE FILE UPLOAD
+uploaded_files = st.file_uploader("Upload one or more Excel files", type=["xlsx"], accept_multiple_files=True)
 
-if files:
+if uploaded_files:
 
-    dataframes = []
+    summary = fleet_summary(uploaded_files)
 
-    for file in files:
-        df = process_excel(file)
+    # KPI
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Vehicles", summary["total_vehicles"])
+    col2.metric("Trips", summary["total_trips"])
+    col3.metric("Idle", summary["total_idle"])
+    col4.metric("Efficiency", summary["efficiency"])
 
-        if df is None:
-            st.error("❌ 'Trip' column not found in file")
-        else:
-            dataframes.append(df)
+    st.markdown("---")
 
-    # SINGLE FILE ANALYSIS
-    if len(dataframes) == 1:
-        df = dataframes[0]
+    # SMART QUERY
+    st.subheader("💬 Ask in natural language")
 
-        st.subheader("📊 Fleet Summary")
+    query = st.text_input("Ask anything about fleet")
 
-        summary = fleet_summary(df)
+    if query:
+        answer = smart_query(query, uploaded_files)
+        st.success(answer)
 
-        st.metric("Total Vehicles", summary["total_vehicles"])
-        st.metric("Total Trips", summary["total_trips"])
-        st.metric("Idle Vehicles", summary["total_idle"])
-        st.metric("Avg Trips", summary["avg_trips"])
-        st.metric("Efficiency", summary["efficiency"])
+    st.markdown("---")
 
-        st.subheader("🤖 Insights")
+    # GRAPH
+    st.subheader("📊 Fleet Graph")
 
-        insights = generate_insights(summary)
-
-        st.text(insights)
-
-    # MULTIPLE FILE COMPARISON
-    elif len(dataframes) >= 2:
-        st.subheader("📊 Comparison")
-
-        result = compare_files(dataframes[0], dataframes[1])
-
-        st.write("File 1 Summary:", result["file1"])
-        st.write("File 2 Summary:", result["file2"])
-
-        st.subheader("🤖 Insights")
-
-        insights = generate_insights(result["file1"])
-
-        st.text(insights)
+    df = pd.DataFrame(summary["vehicle_data"]).T
+    st.bar_chart(df)
 
 else:
     st.info("Upload Excel files to start")
