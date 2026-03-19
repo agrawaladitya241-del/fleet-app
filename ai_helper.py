@@ -1,9 +1,4 @@
 import pandas as pd
-from openai import OpenAI
-import streamlit as st
-
-# OpenAI setup
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
 def process_excel(uploaded_file):
@@ -15,10 +10,10 @@ def process_excel(uploaded_file):
     # Remove empty rows
     df = df.dropna(how="all")
 
-    # Find vehicle column (first column)
+    # First column = vehicle
     vehicle_col = df.columns[0]
 
-    # Find Trip column EXACTLY
+    # Trip column must exist
     if "Trip" not in df.columns:
         return None
 
@@ -62,26 +57,29 @@ def compare_files(df1, df2):
     }
 
 
+# 🔥 SAFE DEMO INSIGHTS (NO API)
 def generate_insights(summary):
-    prompt = f"""
-    You are a fleet operations expert.
+    return f"""
+🚛 Fleet Performance Insights
 
-    Fleet Data:
-    Total Vehicles: {summary['total_vehicles']}
-    Total Trips: {summary['total_trips']}
-    Idle Vehicles: {summary['total_idle']}
-    Avg Trips: {summary['avg_trips']}
-    Efficiency: {summary['efficiency']}
+Total Vehicles: {summary['total_vehicles']}
+Total Trips: {summary['total_trips']}
+Idle Vehicles: {summary['total_idle']}
+Average Trips per Truck: {summary['avg_trips']}
+Efficiency: {summary['efficiency']}
 
-    Give:
-    1. Key problems
-    2. Performance insights
-    3. Actionable suggestions to improve fleet efficiency
-    """
+📊 Key Observations:
+- A portion of the fleet is underutilised
+- Idle trucks indicate dispatch inefficiencies
+- Trip distribution is not balanced across all vehicles
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
+⚠️ Issues:
+- Idle vehicles reduce overall productivity
+- Some trucks are overused while others are unused
 
-    return response.choices[0].message.content
+✅ Recommendations:
+- Reassign idle trucks immediately
+- Balance trip allocation across fleet
+- Improve dispatch planning
+- Track daily performance trends
+"""
