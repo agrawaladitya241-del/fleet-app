@@ -5,7 +5,7 @@ def process_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
 
     # Clean column names
-    df.columns = [str(col).strip() for col in df.columns]
+    df.columns = [str(col).strip().lower() for col in df.columns]
 
     # Remove empty rows
     df = df.dropna(how="all")
@@ -13,11 +13,15 @@ def process_excel(uploaded_file):
     # First column = vehicle
     vehicle_col = df.columns[0]
 
-    # Trip column must exist
-    if "Trip" not in df.columns:
-        return None
+    # Find trip column (flexible)
+    trip_col = None
+    for col in df.columns:
+        if "trip" in col:   # catches trip, trips, Trip etc.
+            trip_col = col
+            break
 
-    trip_col = "Trip"
+    if trip_col is None:
+        return None
 
     df = df[[vehicle_col, trip_col]]
     df.columns = ["vehicle", "trips"]
@@ -57,7 +61,6 @@ def compare_files(df1, df2):
     }
 
 
-# 🔥 SAFE DEMO INSIGHTS (NO API)
 def generate_insights(summary):
     return f"""
 🚛 Fleet Performance Insights
@@ -69,17 +72,16 @@ Average Trips per Truck: {summary['avg_trips']}
 Efficiency: {summary['efficiency']}
 
 📊 Key Observations:
-- A portion of the fleet is underutilised
-- Idle trucks indicate dispatch inefficiencies
-- Trip distribution is not balanced across all vehicles
+- Some trucks are underutilised
+- Idle vehicles reduce productivity
+- Performance varies across fleet
 
 ⚠️ Issues:
-- Idle vehicles reduce overall productivity
-- Some trucks are overused while others are unused
+- Dispatch inefficiency
+- Uneven workload distribution
 
 ✅ Recommendations:
-- Reassign idle trucks immediately
-- Balance trip allocation across fleet
-- Improve dispatch planning
-- Track daily performance trends
+- Use idle trucks better
+- Balance trip allocation
+- Improve planning
 """
