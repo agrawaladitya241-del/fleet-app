@@ -5,7 +5,7 @@ def process_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
 
     # Clean column names
-    df.columns = [str(col).strip().lower() for col in df.columns]
+    df.columns = [str(col).strip() for col in df.columns]
 
     # Remove empty rows
     df = df.dropna(how="all")
@@ -13,18 +13,26 @@ def process_excel(uploaded_file):
     # First column = vehicle
     vehicle_col = df.columns[0]
 
-    # Find trip column (flexible)
+    # 🔥 Find Trip column more intelligently
     trip_col = None
     for col in df.columns:
-        if "trip" in col:   # catches trip, trips, Trip etc.
+        if str(col).strip().lower() in ["trip", "trips"]:
             trip_col = col
             break
 
+    # If still not found → TAKE LAST COLUMN (fallback)
     if trip_col is None:
-        return None
+        trip_col = df.columns[-1]
 
     df = df[[vehicle_col, trip_col]]
     df.columns = ["vehicle", "trips"]
+
+    # 🔥 FORCE CLEAN VALUES
+    df["trips"] = (
+        df["trips"]
+        .astype(str)
+        .str.extract(r"(\d+)")[0]   # extract numbers
+    )
 
     df["trips"] = pd.to_numeric(df["trips"], errors="coerce").fillna(0)
 
@@ -52,12 +60,9 @@ def fleet_summary(df):
 
 
 def compare_files(df1, df2):
-    summary1 = fleet_summary(df1)
-    summary2 = fleet_summary(df2)
-
     return {
-        "file1": summary1,
-        "file2": summary2
+        "file1": fleet_summary(df1),
+        "file2": fleet_summary(df2)
     }
 
 
@@ -71,17 +76,12 @@ Idle Vehicles: {summary['total_idle']}
 Average Trips per Truck: {summary['avg_trips']}
 Efficiency: {summary['efficiency']}
 
-📊 Key Observations:
-- Some trucks are underutilised
-- Idle vehicles reduce productivity
-- Performance varies across fleet
+📊 Observations:
+- Fleet utilisation needs improvement
+- Idle trucks indicate inefficiency
 
-⚠️ Issues:
-- Dispatch inefficiency
-- Uneven workload distribution
-
-✅ Recommendations:
-- Use idle trucks better
-- Balance trip allocation
-- Improve planning
+✅ Actions:
+- Reassign idle trucks
+- Balance workload
+- Improve dispatch planning
 """
