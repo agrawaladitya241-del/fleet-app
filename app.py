@@ -23,7 +23,7 @@ if files:
         else:
             dataframes.append(df)
 
-    # SINGLE FILE
+    # SINGLE FILE ANALYSIS
     if len(dataframes) == 1:
         df = dataframes[0]
 
@@ -31,27 +31,32 @@ if files:
 
         summary = fleet_summary(df)
 
-        st.write(summary)
+        st.metric("Total Vehicles", summary["total_vehicles"])
+        st.metric("Total Trips", summary["total_trips"])
+        st.metric("Idle Vehicles", summary["total_idle"])
+        st.metric("Avg Trips", summary["avg_trips"])
+        st.metric("Efficiency", summary["efficiency"])
 
-        st.subheader("🤖 AI Insights")
+        st.subheader("🤖 Insights")
 
         insights = generate_insights(summary)
 
-        st.write(insights)
+        st.text(insights)
 
-    # MULTIPLE FILES
+    # MULTIPLE FILE COMPARISON
     elif len(dataframes) >= 2:
         st.subheader("📊 Comparison")
 
         result = compare_files(dataframes[0], dataframes[1])
 
-        st.write(result)
+        st.write("File 1 Summary:", result["file1"])
+        st.write("File 2 Summary:", result["file2"])
 
-        st.subheader("🤖 AI Insights")
+        st.subheader("🤖 Insights")
 
         insights = generate_insights(result["file1"])
 
-        st.write(insights)
+        st.text(insights)
 
 else:
     st.info("Upload Excel files to start")
