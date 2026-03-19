@@ -1,63 +1,91 @@
 import streamlit as st
 import pandas as pd
+
+# OLD MODULE
 from ai_helper import smart_query, fleet_summary
+
+# NEW MODULE
+from driver_helper import process_driver_file, driver_summary
 
 st.set_page_config(page_title="Fleet AI", layout="wide")
 
-st.title("🚚 Fleet Intelligence Dashboard")
+st.title("🚚 Fleet Intelligence System")
 
-uploaded_files = st.file_uploader(
-    "Upload Excel files",
-    type=["xlsx"],
-    accept_multiple_files=True
-)
+# ================= TABS =================
+tab1, tab2 = st.tabs(["🚛 Fleet Dashboard", "👨‍✈️ Driver Analytics"])
 
-if uploaded_files:
+# ================= TAB 1 =================
+with tab1:
 
-    summary = fleet_summary(uploaded_files)
-    data = summary["vehicle_data"]
+    uploaded_files = st.file_uploader(
+        "Upload Fleet Excel files",
+        type=["xlsx"],
+        accept_multiple_files=True
+    )
 
-    # KPI
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Vehicles", summary["total_vehicles"])
-    col2.metric("Trips", summary["total_trips"])
-    col3.metric("Idle", summary["total_idle"])
-    col4.metric("Efficiency", summary["efficiency"])
+    if uploaded_files:
 
-    st.markdown("---")
+        summary = fleet_summary(uploaded_files)
+        data = summary["vehicle_data"]
 
-    # Issue KPIs
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("DH", summary["total_dh"])
-    col2.metric("DP", summary["total_dp"])
-    col3.metric("AC", summary["total_ac"])
-    col4.metric("RM", summary["total_rm"])
+        # KPIs
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Vehicles", summary["total_vehicles"])
+        col2.metric("Trips", summary["total_trips"])
+        col3.metric("Idle", summary["total_idle"])
+        col4.metric("Efficiency", summary["efficiency"])
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # Query
-    st.subheader("💬 Ask Anything")
+        # Query
+        st.subheader("💬 Ask Anything")
 
-    query = st.text_input("Ask anything about your fleet data")
+        query = st.text_input("Ask anything about fleet data")
 
-    if query:
-        st.success(smart_query(query, uploaded_files))
+        if query:
+            st.success(smart_query(query, uploaded_files))
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # Table
-    df = pd.DataFrame([
-        {"Vehicle": v, **d}
-        for v, d in data.items()
-    ])
+        # Table
+        df = pd.DataFrame([
+            {"Vehicle": v, **d}
+            for v, d in data.items()
+        ])
 
-    st.dataframe(df)
+        st.dataframe(df)
 
-    # Graph
-    st.subheader("📊 Performance")
+    else:
+        st.info("Upload fleet files")
 
-    chart_df = df.set_index("Vehicle")
-    st.bar_chart(chart_df[["trips", "idle", "dp", "dh"]])
+# ================= TAB 2 =================
+with tab2:
 
-else:
-    st.info("Upload files to begin")
+    driver_file = st.file_uploader(
+        "Upload Driver Assignment Excel",
+        type=["xlsx"]
+    )
+
+    if driver_file:
+
+        df = process_driver_file(driver_file)
+        result = driver_summary(df)
+
+        st.subheader("📊 Driver Performance")
+
+        st.dataframe(result["driver_stats"])
+
+        st.markdown("---")
+
+        col1, col2 = st.columns(2)
+
+        # Drivers with most vehicle changes
+        col1.subheader("🔄 Drivers with Most Vehicle Changes")
+        col1.dataframe(result["driver_changes"].head(10))
+
+        # Vehicles with most driver changes
+        col2.subheader("🚛 Vehicles with Most Driver Changes")
+        col2.dataframe(result["vehicle_changes"].head(10))
+
+    else:
+        st.info("Upload driver assignment file")
