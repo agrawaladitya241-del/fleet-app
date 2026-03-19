@@ -2,31 +2,39 @@ import pandas as pd
 
 
 def process_excel(uploaded_file):
-    # 🔥 Read with header auto-detection fix
-    df = pd.read_excel(uploaded_file, header=0)
+    # Read WITHOUT header assumption
+    df = pd.read_excel(uploaded_file, header=None)
 
-    # Drop empty rows
-    df = df.dropna(how="all")
+    # 🔥 Find the row where "Trip" exists
+    header_row = None
 
-    # Reset index
-    df = df.reset_index(drop=True)
+    for i in range(len(df)):
+        row_values = df.iloc[i].astype(str).str.lower().tolist()
+        if any("trip" in val for val in row_values):
+            header_row = i
+            break
 
-    # Clean column names
+    if header_row is None:
+        raise Exception("❌ Could not find 'Trip' column in file")
+
+    # 🔥 Re-read with correct header
+    df = pd.read_excel(uploaded_file, header=header_row)
+
+    # Clean columns
     df.columns = [str(col).strip() for col in df.columns]
 
-    # DEBUG (important)
-    print("COLUMNS FOUND:", df.columns)
+    # Remove empty rows
+    df = df.dropna(how="all")
 
-    # Try to find Trip column
+    # Find trip column
     trip_col = None
     for col in df.columns:
         if "trip" in col.lower():
             trip_col = col
             break
 
-    # If not found → show error clearly
     if trip_col is None:
-        raise Exception(f"Trip column not found. Columns detected: {df.columns}")
+        raise Exception(f"Trip column not found. Columns: {df.columns}")
 
     # First column = vehicle
     vehicle_col = df.columns[0]
@@ -34,6 +42,7 @@ def process_excel(uploaded_file):
     df = df[[vehicle_col, trip_col]]
     df.columns = ["vehicle", "trips"]
 
+    # Clean values
     df["trips"] = pd.to_numeric(df["trips"], errors="coerce").fillna(0)
 
     return df
@@ -68,12 +77,19 @@ def compare_files(df1, df2):
 
 def generate_insights(summary):
     return f"""
-Fleet Summary:
+🚛 Fleet Performance Insights
 
-Vehicles: {summary['total_vehicles']}
-Trips: {summary['total_trips']}
-Idle: {summary['total_idle']}
+Total Vehicles: {summary['total_vehicles']}
+Total Trips: {summary['total_trips']}
+Idle Vehicles: {summary['total_idle']}
+Average Trips per Truck: {summary['avg_trips']}
+Efficiency: {summary['efficiency']}
 
-Observation:
-Fleet utilisation needs improvement.
+📊 Observations:
+- Fleet utilisation needs improvement
+- Idle trucks indicate inefficiency
+
+✅ Suggestions:
+- Reassign idle trucks
+- Improve dispatch planning
 """
