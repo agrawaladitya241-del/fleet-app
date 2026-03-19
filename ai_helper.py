@@ -14,6 +14,23 @@ def extract_vehicle(text):
     return match[0] if match else None
 
 
+# 🔥 EXACT EXCEL FIND LOGIC
+def count_keyword_in_sheet(uploaded_file, keyword):
+    wb = openpyxl.load_workbook(uploaded_file)
+    ws = wb.active
+
+    count = 0
+    keyword = keyword.upper()
+
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value:
+                val = str(cell.value).upper()
+                count += val.count(keyword)
+
+    return count
+
+
 def process_file(uploaded_file):
     wb = openpyxl.load_workbook(uploaded_file)
     ws = wb.active
@@ -22,7 +39,7 @@ def process_file(uploaded_file):
     trips_col = None
     header_row = 1
 
-    # 🔍 Find columns + header row
+    # Find columns
     for i, row in enumerate(ws.iter_rows(min_row=1, max_row=15), start=1):
         for j, cell in enumerate(row):
             if cell.value:
@@ -39,7 +56,6 @@ def process_file(uploaded_file):
 
     data = {}
 
-    # 🔄 Process rows
     for row in ws.iter_rows(min_row=header_row + 1):
 
         vehicle_raw = row[vehicle_col].value
@@ -50,13 +66,11 @@ def process_file(uploaded_file):
         if not vehicle.startswith("OD"):
             continue
 
-        # Trips
         try:
             trips = int(row[trips_col].value)
         except:
             trips = 0
 
-        # Status counters
         idle = 0
         dh = 0
         dp = 0
@@ -123,15 +137,17 @@ def merge_files(files):
 def fleet_summary(files):
     data = merge_files(files)
 
+    # 🔥 VEHICLE BASED
     total_vehicles = len(data)
     total_trips = sum(v["trips"] for v in data.values())
     total_idle = sum(v["idle"] for v in data.values())
-    total_dh = sum(v["dh"] for v in data.values())
-    total_dp = sum(v["dp"] for v in data.values())
-    total_ac = sum(v["ac"] for v in data.values())
+
+    # 🔥 EXCEL FIND BASED (ACCURATE)
+    total_dh = sum(count_keyword_in_sheet(f, "DH") for f in files)
+    total_dp = sum(count_keyword_in_sheet(f, "DP") for f in files)
+    total_ac = sum(count_keyword_in_sheet(f, "AC") for f in files)
 
     avg_trips = round(total_trips / total_vehicles, 2) if total_vehicles else 0
-    avg_idle = round(total_idle / total_vehicles, 2) if total_vehicles else 0
 
     efficiency = round(
         total_trips / (total_trips + total_idle), 3
@@ -145,7 +161,6 @@ def fleet_summary(files):
         "total_dp": total_dp,
         "total_ac": total_ac,
         "avg_trips": avg_trips,
-        "avg_idle": avg_idle,
         "efficiency": efficiency,
         "vehicle_data": data
     }
@@ -168,13 +183,13 @@ def smart_query(user_input, files):
     if "idle" in text:
         return f"Total idle: {summary['total_idle']}"
 
-    if "driver home" in text or "dh" in text:
+    if "dh" in text or "driver home" in text:
         return f"Total DH days: {summary['total_dh']}"
 
-    if "driver problem" in text or "dp" in text:
+    if "dp" in text or "driver problem" in text:
         return f"Total DP days: {summary['total_dp']}"
 
-    if "accident" in text or "ac" in text:
+    if "ac" in text or "accident" in text:
         return f"Total AC days: {summary['total_ac']}"
 
     if "best" in text or "top" in text:
@@ -185,4 +200,4 @@ def smart_query(user_input, files):
         worst = sorted(data.items(), key=lambda x: x[1]["trips"])[:5]
         return "\n".join([f"{v} → {d['trips']} trips" for v, d in worst])
 
-    return "Try asking about trips, idle, DH, DP, AC or vehicle number."
+    return "Ask about trips, idle, DH, DP, AC or vehicle number."
