@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 
-# OLD MODULE
+# Fleet module
 from ai_helper import smart_query, fleet_summary
 
-# NEW MODULE
+# Driver module
 from driver_helper import process_driver_file, driver_summary, driver_query
 
 st.set_page_config(page_title="Fleet AI", layout="wide")
@@ -28,7 +28,6 @@ with tab1:
         summary = fleet_summary(uploaded_files)
         data = summary["vehicle_data"]
 
-        # KPIs
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Vehicles", summary["total_vehicles"])
         col2.metric("Trips", summary["total_trips"])
@@ -37,17 +36,15 @@ with tab1:
 
         st.markdown("---")
 
-        # Query
-        st.subheader("💬 Ask Anything")
+        st.subheader("💬 Ask About Fleet")
 
-        query = st.text_input("Ask anything about fleet data")
+        query = st.text_input("Ask anything about fleet")
 
         if query:
             st.success(smart_query(query, uploaded_files))
 
         st.markdown("---")
 
-        # Table
         df = pd.DataFrame([
             {"Vehicle": v, **d}
             for v, d in data.items()
@@ -72,20 +69,26 @@ with tab2:
         result = driver_summary(df)
 
         st.subheader("📊 Driver Performance")
-
         st.dataframe(result["driver_stats"])
+
+        st.markdown("---")
+
+        st.subheader("💬 Ask About Drivers")
+
+        d_query = st.text_input("Ask (e.g. total working days of Rahul)")
+
+        if d_query:
+            st.success(driver_query(d_query, df))
 
         st.markdown("---")
 
         col1, col2 = st.columns(2)
 
-        # Drivers with most vehicle changes
         col1.subheader("🔄 Drivers with Most Vehicle Changes")
         col1.dataframe(result["driver_changes"].head(10))
 
-        # Vehicles with most driver changes
         col2.subheader("🚛 Vehicles with Most Driver Changes")
         col2.dataframe(result["vehicle_changes"].head(10))
 
     else:
-        st.info("Upload driver assignment file")
+        st.info("Upload driver file")
