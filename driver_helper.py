@@ -1,4 +1,6 @@
 import pandas as pd
+import re
+
 
 def process_driver_file(uploaded_file):
     df = pd.read_excel(uploaded_file)
@@ -39,3 +41,46 @@ def driver_summary(df):
         "driver_changes": driver_changes.sort_values(by="vehicle_changes", ascending=False),
         "vehicle_changes": vehicle_changes.sort_values(by="driver_changes", ascending=False)
     }
+
+
+# 🔥 SMART QUERY SYSTEM
+def driver_query(user_input, df):
+
+    text = user_input.lower()
+
+    # 🔍 find driver name (partial match also works)
+    drivers = df["driver"].unique()
+    matched_driver = None
+
+    for d in drivers:
+        if d.lower() in text:
+            matched_driver = d
+            break
+
+    # 🔥 DRIVER DETAILS
+    if matched_driver:
+
+        driver_df = df[df["driver"] == matched_driver]
+
+        total_days = int(driver_df["days"].sum())
+        vehicles = driver_df["vehicle"].nunique()
+        changes = len(driver_df)
+
+        return f"""
+Driver: {matched_driver}
+Total Working Days: {total_days}
+Vehicles Driven: {vehicles}
+Assignments (Changes): {changes}
+"""
+
+    # 🔥 TOP DRIVERS
+    if "top" in text or "most" in text:
+        top = df.groupby("driver")["days"].sum().sort_values(ascending=False).head(5)
+        return "\n".join([f"{d} → {int(v)} days" for d, v in top.items()])
+
+    # 🔥 GENERAL DAYS QUERY
+    if "day" in text or "work" in text:
+        summary = df.groupby("driver")["days"].sum().sort_values(ascending=False)
+        return "\n".join([f"{d} → {int(v)} days" for d, v in summary.head(10).items()])
+
+    return "Ask like: 'total working days of Rahul' or 'top drivers'"
