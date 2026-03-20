@@ -48,7 +48,6 @@ def driver_query(user_input, df):
 
     text = user_input.lower()
 
-    # 🔍 find driver name (partial match also works)
     drivers = df["driver"].unique()
     matched_driver = None
 
@@ -57,7 +56,7 @@ def driver_query(user_input, df):
             matched_driver = d
             break
 
-    # 🔥 DRIVER DETAILS
+    # 🔥 DRIVER FULL DETAILS
     if matched_driver:
 
         driver_df = df[df["driver"] == matched_driver]
@@ -66,11 +65,22 @@ def driver_query(user_input, df):
         vehicles = driver_df["vehicle"].nunique()
         changes = len(driver_df)
 
+        # 🔥 VEHICLE-WISE BREAKDOWN
+        vehicle_breakdown = driver_df.groupby("vehicle")["days"].sum()
+
+        breakdown_text = "\n".join(
+            [f"{v} → {int(days)} days" for v, days in vehicle_breakdown.items()]
+        )
+
         return f"""
 Driver: {matched_driver}
+
 Total Working Days: {total_days}
 Vehicles Driven: {vehicles}
 Assignments (Changes): {changes}
+
+--- Vehicle-wise Work ---
+{breakdown_text}
 """
 
     # 🔥 TOP DRIVERS
@@ -78,9 +88,9 @@ Assignments (Changes): {changes}
         top = df.groupby("driver")["days"].sum().sort_values(ascending=False).head(5)
         return "\n".join([f"{d} → {int(v)} days" for d, v in top.items()])
 
-    # 🔥 GENERAL DAYS QUERY
+    # 🔥 GENERAL QUERY
     if "day" in text or "work" in text:
         summary = df.groupby("driver")["days"].sum().sort_values(ascending=False)
         return "\n".join([f"{d} → {int(v)} days" for d, v in summary.head(10).items()])
 
-    return "Ask like: 'total working days of Rahul' or 'top drivers'"
+    return "Ask like: 'Rahul details' or 'working days per vehicle'"
