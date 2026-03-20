@@ -1,87 +1,51 @@
-import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Driver Performance", layout="wide")
+def process_driver_file(uploaded_file):
+    df = pd.read_excel(uploaded_file)
 
-st.title("📊 Driver Performance Dashboard")
+    df.columns = df.columns.str.strip()
 
-# -------------------------------
-# SAMPLE DATA (Replace with your file later)
-# -------------------------------
-data = [
-    {"driver": "Amit", "start_date": "2024-04-01", "end_date": "2024-04-03"},
-    {"driver": "Amit", "start_date": "2024-04-10", "end_date": "2024-04-12"},
-    {"driver": "Rahul", "start_date": "2024-04-05", "end_date": "2024-04-14"},
-    {"driver": "Rahul", "start_date": "2024-04-20", "end_date": "2024-04-22"},
-    {"driver": "Vikram", "start_date": "2024-04-07", "end_date": "2024-04-07"},
-]
+    # Date cleaning
+    df["Assigned On"] = pd.to_datetime(df["Assigned On"], errors="coerce")
+    df["Removed On"] = pd.to_datetime(df["Removed On"], errors="coerce")
 
-df = pd.DataFrame(data)
+    # Fill missing removed dates
+    df["Removed On"].fillna(pd.Timestamp.today(), inplace=True)
 
-# -------------------------------
-# CLEANING
-# -------------------------------
-df["start_date"] = pd.to_datetime(df["start_date"])
-df["end_date"] = pd.to_datetime(df["end_date"])
+    # Calculate days
+    df["calculated_days"] = (df["Removed On"] - df["Assigned On"]).dt.days
+    df["total_days"] = df["Days Assigned"].fillna(df["calculated_days"])
 
-# -------------------------------
-# CALCULATE LEAVE DAYS
-# -------------------------------
-df["leave_days"] = (df["end_date"] - df["start_date"]).dt.days + 1
+    return df
 
-# -------------------------------
-# DRIVER TOTAL LEAVES
-# -------------------------------
-driver_stats = df.groupby("driver")["leave_days"].sum().reset_index()
 
-driver_stats.rename(columns={"leave_days": "total_leave_days"}, inplace=True)
+def driver_summary(df):
+    driver_stats = (
+        df.groupby("Driver Name")["total_days"]
+        .sum()
+        .reset_index()
+        .rename(columns={"total_days": "total_working_days"})
+    )
 
-# -------------------------------
-# FLAG HIGH LEAVE DRIVERS
-# -------------------------------
-THRESHOLD = 5  # you can change this
+    return driver_stats
 
-driver_stats["status"] = driver_stats["total_leave_days"].apply(
-    lambda x: "⚠️ High Leave" if x > THRESHOLD else "✅ Normal"
-)
 
-# -------------------------------
-# DISPLAY RAW DATA
-# -------------------------------
-st.subheader("📄 Leave Records")
-st.dataframe(df, use_container_width=True)
+def vehicle_summary(df):
+    vehicle_run = (
+        df.groupby("Vehicle No")["total_days"]
+        .sum()
+        .reset_index()
+    )
 
-# -------------------------------
-# HIGHLIGHT FUNCTION
-# -------------------------------
-def highlight_rows(row):
-    if row["total_leave_days"] > THRESHOLD:
-        return ["background-color: #ff4d4d"] * len(row)
-    return [""] * len(row)
+    vehicle_run["running_months"] = (vehicle_run["total_days"] / 30).round(1)
 
-# -------------------------------
-# DISPLAY DRIVER STATS
-# -------------------------------
-st.subheader("📊 Driver Summary")
+    return vehicle_run
 
-styled_df = driver_stats.style.apply(highlight_rows, axis=1)
 
-st.dataframe(styled_df, use_container_width=True)
+def driver_changes(df):
+    return df.groupby("Vehicle No").size().reset_index(name="driver_changes")
 
-# -------------------------------
-# METRICS
-# -------------------------------
-col1, col2 = st.columns(2)
 
-with col1:
-    st.metric("Total Drivers", driver_stats["driver"].nunique())
-
-with col2:
-    st.metric("High Leave Drivers", (driver_stats["total_leave_days"] > THRESHOLD).sum())
-
-# -------------------------------
-# DEBUG (SAFE)
-# -------------------------------
-st.subheader("🔍 Debug Info")
-st.write("Columns:", df.columns.tolist())
-st.write("Driver Stats Columns:", driver_stats.columns.tolist())
+def driver_query(df):
+    # Optional placeholder (so import doesn't break)
+    return {"status": "ok"}
