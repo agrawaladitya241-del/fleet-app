@@ -1,153 +1,87 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Fleet Dashboard", layout="wide")
+st.set_page_config(page_title="Driver Performance", layout="wide")
 
-st.title("🚛 Fleet & Driver Performance Dashboard")
+st.title("📊 Driver Performance Dashboard")
 
 # -------------------------------
-# FILE UPLOAD
+# SAMPLE DATA (Replace with your file later)
 # -------------------------------
-uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
+data = [
+    {"driver": "Amit", "start_date": "2024-04-01", "end_date": "2024-04-03"},
+    {"driver": "Amit", "start_date": "2024-04-10", "end_date": "2024-04-12"},
+    {"driver": "Rahul", "start_date": "2024-04-05", "end_date": "2024-04-14"},
+    {"driver": "Rahul", "start_date": "2024-04-20", "end_date": "2024-04-22"},
+    {"driver": "Vikram", "start_date": "2024-04-07", "end_date": "2024-04-07"},
+]
 
-if uploaded_file is not None:
-    df = pd.read_excel(uploaded_file)
+df = pd.DataFrame(data)
 
-    # -------------------------------
-    # DATA CLEANING
-    # -------------------------------
-    df.columns = df.columns.str.strip()
+# -------------------------------
+# CLEANING
+# -------------------------------
+df["start_date"] = pd.to_datetime(df["start_date"])
+df["end_date"] = pd.to_datetime(df["end_date"])
 
-    df["Assigned On"] = pd.to_datetime(df["Assigned On"], errors="coerce")
-    df["Removed On"] = pd.to_datetime(df["Removed On"], errors="coerce")
+# -------------------------------
+# CALCULATE LEAVE DAYS
+# -------------------------------
+df["leave_days"] = (df["end_date"] - df["start_date"]).dt.days + 1
 
-    # Fill missing Removed On with today
-    df["Removed On"].fillna(pd.Timestamp.today(), inplace=True)
+# -------------------------------
+# DRIVER TOTAL LEAVES
+# -------------------------------
+driver_stats = df.groupby("driver")["leave_days"].sum().reset_index()
 
-    # Calculate days safely
-    df["calculated_days"] = (df["Removed On"] - df["Assigned On"]).dt.days
-    df["total_days"] = df["Days Assigned"].fillna(df["calculated_days"])
+driver_stats.rename(columns={"leave_days": "total_leave_days"}, inplace=True)
 
-    # -------------------------------
-    # DRIVER LEAVE / ASSIGNMENT SUMMARY
-    # -------------------------------
-    driver_stats = (
-        df.groupby("Driver Name")["total_days"]
-        .sum()
-        .reset_index()
-        .rename(columns={"total_days": "total_working_days"})
-    )
+# -------------------------------
+# FLAG HIGH LEAVE DRIVERS
+# -------------------------------
+THRESHOLD = 5  # you can change this
 
-    # Threshold for highlighting
-    THRESHOLD = 300
+driver_stats["status"] = driver_stats["total_leave_days"].apply(
+    lambda x: "⚠️ High Leave" if x > THRESHOLD else "✅ Normal"
+)
 
-    driver_stats["status"] = driver_stats["total_working_days"].apply(
-        lambda x: "⚠️ High Load" if x > THRESHOLD else "✅ Normal"
-    )
+# -------------------------------
+# DISPLAY RAW DATA
+# -------------------------------
+st.subheader("📄 Leave Records")
+st.dataframe(df, use_container_width=True)
 
-    # -------------------------------
-    # VEHICLE RUNNING MONTHS
-    # -------------------------------
-    vehicle_run = (
-        df.groupby("Vehicle No")["total_days"]
-        .sum()
-        .reset_index()
-    )
+# -------------------------------
+# HIGHLIGHT FUNCTION
+# -------------------------------
+def highlight_rows(row):
+    if row["total_leave_days"] > THRESHOLD:
+        return ["background-color: #ff4d4d"] * len(row)
+    return [""] * len(row)
 
-    vehicle_run["running_months"] = (vehicle_run["total_days"] / 30).round(1)
+# -------------------------------
+# DISPLAY DRIVER STATS
+# -------------------------------
+st.subheader("📊 Driver Summary")
 
-    # -------------------------------
-    # DRIVER CHANGES PER VEHICLE
-    # -------------------------------
-    driver_changes = (
-        df.groupby("Vehicle No")
-        .size()
-        .reset_index(name="driver_changes")
-    )
+styled_df = driver_stats.style.apply(highlight_rows, axis=1)
 
-    # Least driver change truck
-    least_change_truck = driver_changes.sort_values(by="driver_changes").iloc[0]
+st.dataframe(styled_df, use_container_width=True)
 
-    # -------------------------------
-    # UI LAYOUT
-    # -------------------------------
-    tab1, tab2, tab3 = st.tabs(["📊 Driver Stats", "🚛 Vehicle Usage", "🔄 Stability"])
+# -------------------------------
+# METRICS
+# -------------------------------
+col1, col2 = st.columns(2)
 
-    # -------------------------------
-    # TAB 1: DRIVER STATS
-    # -------------------------------
-    with tab1:
-        st.subheader("Driver Performance")
+with col1:
+    st.metric("Total Drivers", driver_stats["driver"].nunique())
 
-        def highlight_driver(row):
-            if row["total_working_days"] > THRESHOLD:
-                return ["background-color: #ff4d4d"] * len(row)
-            return [""] * len(row)
+with col2:
+    st.metric("High Leave Drivers", (driver_stats["total_leave_days"] > THRESHOLD).sum())
 
-        st.dataframe(
-            driver_stats.style.apply(highlight_driver, axis=1),
-            use_container_width=True
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.metric("Total Drivers", driver_stats["Driver Name"].nunique())
-
-        with col2:
-            st.metric(
-                "High Load Drivers",
-                (driver_stats["total_working_days"] > THRESHOLD).sum()
-            )
-
-    # -------------------------------
-    # TAB 2: VEHICLE USAGE
-    # -------------------------------
-    with tab2:
-        st.subheader("Vehicle Running Duration (Months)")
-
-        st.dataframe(
-            vehicle_run.sort_values(by="running_months", ascending=False),
-            use_container_width=True
-        )
-
-        st.subheader("Top 5 Most Used Vehicles")
-
-        st.dataframe(
-            vehicle_run.sort_values(by="running_months", ascending=False).head(5),
-            use_container_width=True
-        )
-
-    # -------------------------------
-    # TAB 3: DRIVER CHANGES
-    # -------------------------------
-    with tab3:
-        st.subheader("Driver Changes per Vehicle")
-
-        st.dataframe(
-            driver_changes.sort_values(by="driver_changes"),
-            use_container_width=True
-        )
-
-        st.subheader("🏆 Most Stable Truck")
-
-        st.success(
-            f"Vehicle: {least_change_truck['Vehicle No']} | "
-            f"Driver Changes: {least_change_truck['driver_changes']}"
-        )
-
-        st.subheader("⚠️ High Change Vehicles")
-
-        high_change = driver_changes[driver_changes["driver_changes"] > 5]
-
-        st.dataframe(high_change, use_container_width=True)
-
-    # -------------------------------
-    # RAW DATA (DEBUG)
-    # -------------------------------
-    with st.expander("🔍 View Raw Data"):
-        st.dataframe(df, use_container_width=True)
-
-else:
-    st.info("Please upload your Excel file to proceed.")
-    
+# -------------------------------
+# DEBUG (SAFE)
+# -------------------------------
+st.subheader("🔍 Debug Info")
+st.write("Columns:", df.columns.tolist())
+st.write("Driver Stats Columns:", driver_stats.columns.tolist())
