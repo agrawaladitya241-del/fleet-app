@@ -1,131 +1,87 @@
+import streamlit as st
 import pandas as pd
 
+st.set_page_config(page_title="Driver Performance", layout="wide")
 
-def process_driver_file(uploaded_file):
-    df = pd.read_excel(uploaded_file)
+st.title("📊 Driver Performance Dashboard")
 
-    df.columns = df.columns.str.strip().str.lower()
+# -------------------------------
+# SAMPLE DATA (Replace with your file later)
+# -------------------------------
+data = [
+    {"driver": "Amit", "start_date": "2024-04-01", "end_date": "2024-04-03"},
+    {"driver": "Amit", "start_date": "2024-04-10", "end_date": "2024-04-12"},
+    {"driver": "Rahul", "start_date": "2024-04-05", "end_date": "2024-04-14"},
+    {"driver": "Rahul", "start_date": "2024-04-20", "end_date": "2024-04-22"},
+    {"driver": "Vikram", "start_date": "2024-04-07", "end_date": "2024-04-07"},
+]
 
-    # detect columns automatically
-    vehicle_col = [c for c in df.columns if "vehicle" in c][0]
-    driver_col = [c for c in df.columns if "driver" in c][0]
-    assign_col = [c for c in df.columns if "assign" in c][0]
-    remove_col = [c for c in df.columns if "remove" in c or "change" in c][0]
-    days_col = [c for c in df.columns if "day" in c][0]
+df = pd.DataFrame(data)
 
-    df = df[[vehicle_col, driver_col, assign_col, remove_col, days_col]]
+# -------------------------------
+# CLEANING
+# -------------------------------
+df["start_date"] = pd.to_datetime(df["start_date"])
+df["end_date"] = pd.to_datetime(df["end_date"])
 
-    df.columns = ["vehicle", "driver", "assign_date", "remove_date", "days"]
+# -------------------------------
+# CALCULATE LEAVE DAYS
+# -------------------------------
+df["leave_days"] = (df["end_date"] - df["start_date"]).dt.days + 1
 
-    df["vehicle"] = df["vehicle"].astype(str).str.replace(" ", "").str.upper()
-    df["driver"] = df["driver"].astype(str).str.strip()
+# -------------------------------
+# DRIVER TOTAL LEAVES
+# -------------------------------
+driver_stats = df.groupby("driver")["leave_days"].sum().reset_index()
 
-    df["assign_date"] = pd.to_datetime(df["assign_date"], errors="coerce")
-    df["remove_date"] = pd.to_datetime(df["remove_date"], errors="coerce")
+driver_stats.rename(columns={"leave_days": "total_leave_days"}, inplace=True)
 
-    df["days"] = pd.to_numeric(df["days"], errors="coerce").fillna(0)
+# -------------------------------
+# FLAG HIGH LEAVE DRIVERS
+# -------------------------------
+THRESHOLD = 5  # you can change this
 
-    return df
+driver_stats["status"] = driver_stats["total_leave_days"].apply(
+    lambda x: "⚠️ High Leave" if x > THRESHOLD else "✅ Normal"
+)
 
+# -------------------------------
+# DISPLAY RAW DATA
+# -------------------------------
+st.subheader("📄 Leave Records")
+st.dataframe(df, use_container_width=True)
 
-# 🔥 DRIVER SUMMARY
-def driver_summary(df):
+# -------------------------------
+# HIGHLIGHT FUNCTION
+# -------------------------------
+def highlight_rows(row):
+    if row["total_leave_days"] > THRESHOLD:
+        return ["background-color: #ff4d4d"] * len(row)
+    return [""] * len(row)
 
-    driver_days = df.groupby("driver")["days"].sum().reset_index()
+# -------------------------------
+# DISPLAY DRIVER STATS
+# -------------------------------
+st.subheader("📊 Driver Summary")
 
-    driver_vehicle_count = df.groupby("driver")["vehicle"].nunique().reset_index()
-    driver_vehicle_count.columns = ["driver", "vehicle_count"]
+styled_df = driver_stats.style.apply(highlight_rows, axis=1)
 
-    driver_stats = pd.merge(driver_days, driver_vehicle_count, on="driver")
+st.dataframe(styled_df, use_container_width=True)
 
-    vehicle_changes = df.groupby("vehicle")["driver"].nunique().reset_index()
-    vehicle_changes.columns = ["vehicle", "driver_changes"]
+# -------------------------------
+# METRICS
+# -------------------------------
+col1, col2 = st.columns(2)
 
-    driver_changes = df.groupby("driver")["vehicle"].nunique().reset_index()
-    driver_changes.columns = ["driver", "vehicle_changes"]
+with col1:
+    st.metric("Total Drivers", driver_stats["driver"].nunique())
 
-    return {
-        "driver_stats": driver_stats.sort_values(by="days", ascending=False),
-        "driver_changes": driver_changes.sort_values(by="vehicle_changes", ascending=False),
-        "vehicle_changes": vehicle_changes.sort_values(by="driver_changes", ascending=False)
-    }
+with col2:
+    st.metric("High Leave Drivers", (driver_stats["total_leave_days"] > THRESHOLD).sum())
 
-
-# 🔥 DH CALCULATION (CORE LOGIC)
-def calculate_driver_dh(df):
-
-    dh_result = {}
-
-    for driver, group in df.groupby("driver"):
-
-        # sort by assignment date
-        group = group.sort_values(by="assign_date").reset_index(drop=True)
-
-        dh_days = 0
-
-        for i in range(len(group) - 1):
-
-            current_remove = group.loc[i, "remove_date"]
-            next_assign = group.loc[i + 1, "assign_date"]
-
-            if pd.notna(current_remove) and pd.notna(next_assign):
-
-                gap = (next_assign - current_remove).days
-
-                if gap > 0:
-                    dh_days += gap
-
-        dh_result[driver] = dh_days
-
-    return dh_result
-
-
-# 🔥 SMART QUERY
-def driver_query(user_input, df):
-
-    text = user_input.lower()
-
-    drivers = df["driver"].unique()
-    matched_driver = None
-
-    for d in drivers:
-        if d.lower() in text:
-            matched_driver = d
-            break
-
-    dh_map = calculate_driver_dh(df)
-
-    # DRIVER DETAILS
-    if matched_driver:
-
-        driver_df = df[df["driver"] == matched_driver]
-
-        total_days = int(driver_df["days"].sum())
-        vehicles = driver_df["vehicle"].nunique()
-        changes = len(driver_df)
-        dh_days = dh_map.get(matched_driver, 0)
-
-        vehicle_breakdown = driver_df.groupby("vehicle")["days"].sum()
-
-        breakdown_text = "\n".join(
-            [f"{v} → {int(days)} days" for v, days in vehicle_breakdown.items()]
-        )
-
-        return f"""
-Driver: {matched_driver}
-
-Total Working Days: {total_days}
-Vehicles Driven: {vehicles}
-Assignments: {changes}
-Driver Home Days (DH): {dh_days}
-
---- Vehicle-wise Work ---
-{breakdown_text}
-"""
-
-    # TOP DRIVERS
-    if "top" in text or "most" in text:
-        top = df.groupby("driver")["days"].sum().sort_values(ascending=False).head(5)
-        return "\n".join([f"{d} → {int(v)} days" for d, v in top.items()])
-
-    return "Ask like: 'Mithun details' or 'driver working days'"
+# -------------------------------
+# DEBUG (SAFE)
+# -------------------------------
+st.subheader("🔍 Debug Info")
+st.write("Columns:", df.columns.tolist())
+st.write("Driver Stats Columns:", driver_stats.columns.tolist())
