@@ -5,7 +5,7 @@ import pandas as pd
 from ai_helper import smart_query, fleet_summary
 
 # NEW MODULE
-from driver_helper import process_driver_file, driver_summary
+from driver_helper import process_driver_file, driver_summary, driver_query
 
 st.set_page_config(page_title="Fleet AI", layout="wide")
 
