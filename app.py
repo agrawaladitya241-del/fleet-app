@@ -1,94 +1,94 @@
 import streamlit as st
-import pandas as pd
+from driver_helper import (
+    process_driver_file,
+    driver_summary,
+    vehicle_summary,
+    driver_changes
+)
 
-# Fleet module
-from ai_helper import smart_query, fleet_summary
+st.set_page_config(page_title="Fleet Dashboard", layout="wide")
 
-# Driver module
-from driver_helper import process_driver_file, driver_summary, driver_query
+st.title("🚛 Fleet & Driver Dashboard")
 
-st.set_page_config(page_title="Fleet AI", layout="wide")
+# -------------------------------
+# FILE UPLOAD
+# -------------------------------
+uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
 
-st.title("🚚 Fleet Intelligence System")
+if uploaded_file is not None:
 
-# ================= TABS =================
-tab1, tab2 = st.tabs(["🚛 Fleet Dashboard", "👨‍✈️ Driver Analytics"])
+    df = process_driver_file(uploaded_file)
 
-# ================= TAB 1 =================
-with tab1:
+    # -------------------------------
+    # CALCULATIONS
+    # -------------------------------
+    driver_stats = driver_summary(df)
+    vehicle_run = vehicle_summary(df)
+    changes = driver_changes(df)
 
-    uploaded_files = st.file_uploader(
-        "Upload Fleet Excel files",
-        type=["xlsx"],
-        accept_multiple_files=True
-    )
+    least_change_truck = changes.sort_values(by="driver_changes").iloc[0]
 
-    if uploaded_files:
+    # -------------------------------
+    # TABS
+    # -------------------------------
+    tab1, tab2, tab3 = st.tabs(["📊 Drivers", "🚛 Vehicles", "🔄 Stability"])
 
-        summary = fleet_summary(uploaded_files)
-        data = summary["vehicle_data"]
+    # -------------------------------
+    # DRIVER TAB
+    # -------------------------------
+    with tab1:
+        st.subheader("Driver Performance")
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Vehicles", summary["total_vehicles"])
-        col2.metric("Trips", summary["total_trips"])
-        col3.metric("Idle", summary["total_idle"])
-        col4.metric("Efficiency", summary["efficiency"])
+        THRESHOLD = 300
 
-        st.markdown("---")
+        def highlight(row):
+            if row["total_working_days"] > THRESHOLD:
+                return ["background-color: #ff4d4d"] * len(row)
+            return [""] * len(row)
 
-        st.subheader("💬 Ask About Fleet")
+        st.dataframe(
+            driver_stats.style.apply(highlight, axis=1),
+            use_container_width=True
+        )
 
-        query = st.text_input("Ask anything about fleet")
+    # -------------------------------
+    # VEHICLE TAB
+    # -------------------------------
+    with tab2:
+        st.subheader("Vehicle Running Months")
 
-        if query:
-            st.success(smart_query(query, uploaded_files))
+        st.dataframe(
+            vehicle_run.sort_values(by="running_months", ascending=False),
+            use_container_width=True
+        )
 
-        st.markdown("---")
+    # -------------------------------
+    # STABILITY TAB
+    # -------------------------------
+    with tab3:
+        st.subheader("Driver Changes")
 
-        df = pd.DataFrame([
-            {"Vehicle": v, **d}
-            for v, d in data.items()
-        ])
+        st.dataframe(
+            changes.sort_values(by="driver_changes"),
+            use_container_width=True
+        )
 
+        st.success(
+            f"🏆 Most Stable Truck: {least_change_truck['Vehicle No']} "
+            f"({least_change_truck['driver_changes']} changes)"
+        )
+
+        st.subheader("⚠️ High Change Trucks")
+        st.dataframe(
+            changes[changes["driver_changes"] > 5],
+            use_container_width=True
+        )
+
+    # -------------------------------
+    # RAW DATA
+    # -------------------------------
+    with st.expander("🔍 Raw Data"):
         st.dataframe(df)
 
-    else:
-        st.info("Upload fleet files")
-
-# ================= TAB 2 =================
-with tab2:
-
-    driver_file = st.file_uploader(
-        "Upload Driver Assignment Excel",
-        type=["xlsx"]
-    )
-
-    if driver_file:
-
-        df = process_driver_file(driver_file)
-        result = driver_summary(df)
-
-        st.subheader("📊 Driver Performance")
-        st.dataframe(result["driver_stats"])
-
-        st.markdown("---")
-
-        st.subheader("💬 Ask About Drivers")
-
-        d_query = st.text_input("Ask (e.g. total working days of Rahul)")
-
-        if d_query:
-            st.success(driver_query(d_query, df))
-
-        st.markdown("---")
-
-        col1, col2 = st.columns(2)
-
-        col1.subheader("🔄 Drivers with Most Vehicle Changes")
-        col1.dataframe(result["driver_changes"].head(10))
-
-        col2.subheader("🚛 Vehicles with Most Driver Changes")
-        col2.dataframe(result["vehicle_changes"].head(10))
-
-    else:
-        st.info("Upload driver file")
+else:
+    st.info("Upload your Excel file to begin.")
