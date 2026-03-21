@@ -6,9 +6,17 @@ def process_driver_file(uploaded_file):
 
     df.columns = df.columns.str.strip().str.lower()
 
-    vehicle_col = [c for c in df.columns if "vehicle" in c][0]
-    driver_col = [c for c in df.columns if "driver" in c][0]
-    days_col = [c for c in df.columns if "day" in c][0]
+    # SAFE COLUMN DETECTION
+    vehicle_cols = [c for c in df.columns if "vehicle" in c]
+    driver_cols = [c for c in df.columns if "driver" in c]
+    days_cols = [c for c in df.columns if "day" in c]
+
+    if not vehicle_cols or not driver_cols or not days_cols:
+        return pd.DataFrame(columns=["vehicle", "driver", "days"])
+
+    vehicle_col = vehicle_cols[0]
+    driver_col = driver_cols[0]
+    days_col = days_cols[0]
 
     df = df[[vehicle_col, driver_col, days_col]]
     df.columns = ["vehicle", "driver", "days"]
@@ -21,12 +29,17 @@ def process_driver_file(uploaded_file):
 
 
 def driver_summary(df):
+    if df.empty:
+        return pd.DataFrame(columns=["driver", "days"])
+
     driver_days = df.groupby("driver")["days"].sum().reset_index()
-    driver_days = driver_days.sort_values(by="days", ascending=False)
-    return driver_days
+    return driver_days.sort_values(by="days", ascending=False)
 
 
 def driver_query(user_input, df):
+    if df.empty:
+        return "Driver data not found in file"
+
     text = user_input.lower()
 
     for driver in df["driver"].unique():
@@ -35,11 +48,7 @@ def driver_query(user_input, df):
             total_days = int(d["days"].sum())
             vehicles = d["vehicle"].nunique()
 
-            return f"""
-Driver: {driver}
-Working Days: {total_days}
-Vehicles Driven: {vehicles}
-"""
+            return f"{driver} → {total_days} days, {vehicles} vehicles"
 
     if "top" in text:
         top = df.groupby("driver")["days"].sum().sort_values(ascending=False).head(5)
