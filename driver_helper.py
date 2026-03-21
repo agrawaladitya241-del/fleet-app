@@ -7,12 +7,17 @@ def process_driver_file(file):
 
     df.columns = df.columns.str.strip().str.lower()
 
-    vehicle_col = [c for c in df.columns if "vehicle" in c][0]
-    driver_col = [c for c in df.columns if "driver" in c][0]
-    assigned_col = [c for c in df.columns if "assign" in c][0]
-    removed_col = [c for c in df.columns if "remov" in c]
+    # DEBUG: print columns
+    print("COLUMNS FOUND:", df.columns.tolist())
 
-    removed_col = removed_col[0] if removed_col else None
+    # SAFE DETECTION
+    vehicle_col = next((c for c in df.columns if "vehicle" in c), None)
+    driver_col = next((c for c in df.columns if "driver" in c), None)
+    assigned_col = next((c for c in df.columns if "assign" in c or "date" in c), None)
+    removed_col = next((c for c in df.columns if "remov" in c or "to" in c), None)
+
+    if not vehicle_col or not driver_col or not assigned_col:
+        return pd.DataFrame()
 
     df = df[[vehicle_col, driver_col, assigned_col] + ([removed_col] if removed_col else [])]
 
@@ -23,9 +28,9 @@ def process_driver_file(file):
     if "removed" in df.columns:
         df["removed"] = pd.to_datetime(df["removed"], errors="coerce")
     else:
-        df["removed"] = None
+        df["removed"] = pd.NaT
 
-    # 🔥 HANDLE MISSING REMOVED DATE
+    # HANDLE MISSING REMOVED
     today = pd.to_datetime(datetime.today().date())
     df["removed"] = df["removed"].fillna(today)
 
@@ -41,7 +46,7 @@ def driver_summary(df):
     df["working_days"] = (df["removed"] - df["assigned"]).dt.days
 
     df["working_days"] = df["working_days"].fillna(0)
-    df["working_days"] = df["working_days"].apply(lambda x: x if x > 0 else 0)
+    df["working_days"] = df["working_days"].clip(lower=0)
 
     summary = df.groupby("driver").agg(
         total_days=("working_days", "sum"),
@@ -52,31 +57,25 @@ def driver_summary(df):
     return summary.sort_values(by="total_days", ascending=False)
 
 
-# ================= DRIVER HOME DAYS =================
+# ================= HOME DAYS =================
 def driver_home_days(df):
+
+    if df.empty:
+        return pd.DataFrame()
 
     results = []
 
     for driver in df["driver"].unique():
-
         d = df[df["driver"] == driver].sort_values(by="assigned")
 
         home_days = 0
 
         for i in range(len(d) - 1):
-            prev_removed = d.iloc[i]["removed"]
-            next_assigned = d.iloc[i + 1]["assigned"]
+            gap = (d.iloc[i + 1]["assigned"] - d.iloc[i]["removed"]).days
+            if gap > 0:
+                home_days += gap
 
-            if pd.notna(prev_removed) and pd.notna(next_assigned):
-                gap = (next_assigned - prev_removed).days
-
-                if gap > 0:
-                    home_days += gap
-
-        results.append({
-            "driver": driver,
-            "home_days": home_days
-        })
+        results.append({"driver": driver, "home_days": home_days})
 
     return pd.DataFrame(results).sort_values(by="home_days", ascending=False)
 
