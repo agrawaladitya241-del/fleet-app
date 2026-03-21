@@ -56,7 +56,7 @@ def process_file(uploaded_file):
 
         dp = dh = ac = rm = park = 0
 
-        # 🔥 FULL EXCEL FIND LOGIC
+        # 🔥 Excel FIND LOGIC
         for cell in row:
             val = str(cell.value).upper() if cell.value else ""
 
@@ -121,10 +121,15 @@ def fleet_summary(files):
     total_trips = sum(v["trips"] for v in data.values())
     total_idle = sum(v["park"] for v in data.values())
 
+    efficiency = 0
+    if (total_trips + total_idle) > 0:
+        efficiency = round(total_trips / (total_trips + total_idle), 3)
+
     return {
         "total_vehicles": total_vehicles,
         "total_trips": total_trips,
         "total_idle": total_idle,
+        "efficiency": efficiency,
         "vehicle_data": data
     }
 
