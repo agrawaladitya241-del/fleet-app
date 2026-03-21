@@ -56,6 +56,7 @@ with tab1:
 
 
 # ================= DRIVER =================
+# ================= DRIVER =================
 with tab2:
 
     file = st.file_uploader(
@@ -71,16 +72,53 @@ with tab2:
             if df.empty:
                 st.warning("Driver columns not detected properly")
             else:
-                st.subheader("Driver Summary")
-                stats = driver_summary(df)
-                st.dataframe(stats)
+
+                # ================= KPI =================
+                total_drivers = df["driver"].nunique()
+                total_days = int(df["days"].sum())
+                avg_days = round(total_days / total_drivers, 2) if total_drivers else 0
+                total_assignments = len(df)
+
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Drivers", total_drivers)
+                col2.metric("Total Days", total_days)
+                col3.metric("Avg Days", avg_days)
+                col4.metric("Assignments", total_assignments)
 
                 st.markdown("---")
 
-                query = st.text_input("Ask Driver", key="driver_q")
+                # ================= SUMMARY =================
+                summary = driver_summary(df)
 
-                if query:
-                    st.success(driver_query(query, df))
+                # BEST DRIVERS
+                st.subheader("🥇 Best Drivers")
+                st.dataframe(summary.head(5))
+
+                # WORST DRIVERS
+                st.subheader("🐢 Worst Drivers")
+                st.dataframe(summary.tail(5))
+
+                st.markdown("---")
+
+                # ================= DRIVER CHANGES =================
+                changes = vehicle_driver_changes(df)
+
+                st.subheader("🔄 Vehicles with Most Driver Changes")
+                st.dataframe(changes.head(10))
+
+                st.markdown("---")
+
+                # ================= HOME DAYS =================
+                home = driver_home_days(df)
+
+                st.subheader("🏠 Drivers with Highest Home Days")
+                st.dataframe(home.head(10))
+
+                st.markdown("---")
+
+                # ================= FULL TABLE =================
+                st.subheader("📋 Full Driver Data")
+                st.dataframe(summary)
 
         except Exception as e:
             st.error(f"Driver Error: {e}")
