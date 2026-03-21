@@ -1,4 +1,5 @@
 import pandas as pd
+from datetime import datetime
 
 
 def process_driver_file(file):
@@ -6,18 +7,27 @@ def process_driver_file(file):
 
     df.columns = df.columns.str.strip().str.lower()
 
-    # detect columns
     vehicle_col = [c for c in df.columns if "vehicle" in c][0]
     driver_col = [c for c in df.columns if "driver" in c][0]
-
     assigned_col = [c for c in df.columns if "assign" in c][0]
-    removed_col = [c for c in df.columns if "remov" in c][0]
+    removed_col = [c for c in df.columns if "remov" in c]
 
-    df = df[[vehicle_col, driver_col, assigned_col, removed_col]]
-    df.columns = ["vehicle", "driver", "assigned", "removed"]
+    removed_col = removed_col[0] if removed_col else None
+
+    df = df[[vehicle_col, driver_col, assigned_col] + ([removed_col] if removed_col else [])]
+
+    df.columns = ["vehicle", "driver", "assigned"] + (["removed"] if removed_col else [])
 
     df["assigned"] = pd.to_datetime(df["assigned"], errors="coerce")
-    df["removed"] = pd.to_datetime(df["removed"], errors="coerce")
+
+    if "removed" in df.columns:
+        df["removed"] = pd.to_datetime(df["removed"], errors="coerce")
+    else:
+        df["removed"] = None
+
+    # 🔥 HANDLE MISSING REMOVED DATE
+    today = pd.to_datetime(datetime.today().date())
+    df["removed"] = df["removed"].fillna(today)
 
     return df
 
@@ -28,7 +38,10 @@ def driver_summary(df):
     if df.empty:
         return pd.DataFrame()
 
-    df["working_days"] = (df["removed"] - df["assigned"]).dt.days.fillna(0)
+    df["working_days"] = (df["removed"] - df["assigned"]).dt.days
+
+    df["working_days"] = df["working_days"].fillna(0)
+    df["working_days"] = df["working_days"].apply(lambda x: x if x > 0 else 0)
 
     summary = df.groupby("driver").agg(
         total_days=("working_days", "sum"),
@@ -70,6 +83,9 @@ def driver_home_days(df):
 
 # ================= DRIVER CHANGES =================
 def vehicle_driver_changes(df):
+
+    if df.empty:
+        return pd.DataFrame()
 
     changes = df.groupby("vehicle")["driver"].nunique()
 
