@@ -1,48 +1,48 @@
 import pandas as pd
 
+
 def process_driver_file(uploaded_file):
     df = pd.read_excel(uploaded_file)
 
-    df.columns = df.columns.str.strip()
+    df.columns = df.columns.str.strip().str.lower()
 
-    df["Assigned On"] = pd.to_datetime(df["Assigned On"], errors="coerce")
-    df["Removed On"] = pd.to_datetime(df["Removed On"], errors="coerce")
+    vehicle_col = [c for c in df.columns if "vehicle" in c][0]
+    driver_col = [c for c in df.columns if "driver" in c][0]
+    days_col = [c for c in df.columns if "day" in c][0]
 
-    df["Removed On"].fillna(pd.Timestamp.today(), inplace=True)
+    df = df[[vehicle_col, driver_col, days_col]]
+    df.columns = ["vehicle", "driver", "days"]
 
-    df["calculated_days"] = (df["Removed On"] - df["Assigned On"]).dt.days
-    df["total_days"] = df["Days Assigned"].fillna(df["calculated_days"])
+    df["vehicle"] = df["vehicle"].astype(str)
+    df["driver"] = df["driver"].astype(str)
+    df["days"] = pd.to_numeric(df["days"], errors="coerce").fillna(0)
 
     return df
 
 
 def driver_summary(df):
-    return (
-        df.groupby("Driver Name")["total_days"]
-        .sum()
-        .reset_index()
-        .rename(columns={"total_days": "total_working_days"})
-    )
+    driver_days = df.groupby("driver")["days"].sum().reset_index()
+    driver_days = driver_days.sort_values(by="days", ascending=False)
+    return driver_days
 
 
-def driver_query(df):
-    vehicle_run = (
-        df.groupby("Vehicle No")["total_days"]
-        .sum()
-        .reset_index()
-    )
-    vehicle_run["running_months"] = (vehicle_run["total_days"] / 30).round(1)
+def driver_query(user_input, df):
+    text = user_input.lower()
 
-    driver_changes = (
-        df.groupby("Vehicle No")
-        .size()
-        .reset_index(name="driver_changes")
-    )
+    for driver in df["driver"].unique():
+        if driver.lower() in text:
+            d = df[df["driver"] == driver]
+            total_days = int(d["days"].sum())
+            vehicles = d["vehicle"].nunique()
 
-    least_change_truck = driver_changes.sort_values(by="driver_changes").iloc[0]
+            return f"""
+Driver: {driver}
+Working Days: {total_days}
+Vehicles Driven: {vehicles}
+"""
 
-    return {
-        "vehicle_run": vehicle_run,
-        "driver_changes": driver_changes,
-        "least_change_truck": least_change_truck
-    }
+    if "top" in text:
+        top = df.groupby("driver")["days"].sum().sort_values(ascending=False).head(5)
+        return "\n".join([f"{d} → {int(v)} days" for d, v in top.items()])
+
+    return "Ask like: 'Rahul details' or 'top drivers'"
