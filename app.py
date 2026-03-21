@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 
-# IMPORTS (CLEAN)
 from ai_helper import smart_query, fleet_summary
 from driver_helper import (
     process_driver_file,
@@ -20,12 +19,7 @@ tab1, tab2 = st.tabs(["Fleet", "Driver"])
 # ================= FLEET =================
 with tab1:
 
-    files = st.file_uploader(
-        "Upload Fleet Files",
-        type=["xlsx"],
-        accept_multiple_files=True,
-        key="fleet"
-    )
+    files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
 
     if files:
         try:
@@ -36,13 +30,6 @@ with tab1:
             col2.metric("Trips", summary["total_trips"])
             col3.metric("Idle", summary["total_idle"])
             col4.metric("Efficiency", summary["efficiency"])
-
-            st.markdown("---")
-
-            query = st.text_input("Ask Fleet")
-
-            if query:
-                st.success(smart_query(query, files))
 
             if summary["vehicle_data"]:
                 df = pd.DataFrame(summary["vehicle_data"]).T
@@ -58,30 +45,29 @@ with tab1:
 # ================= DRIVER =================
 with tab2:
 
-    file = st.file_uploader("Upload Driver File", type=["xlsx"], key="driver")
+    file = st.file_uploader("Upload Driver File", type=["xlsx"])
 
     if file:
         try:
             df = process_driver_file(file)
 
             if df.empty:
-                st.warning("Driver file format not detected properly")
+                st.error("❌ Could not detect required columns (vehicle/driver/assigned)")
             else:
 
-                total_drivers = df["driver"].nunique()
-                total_days = int(df["days"].sum())
-                avg_days = round(total_days / total_drivers, 2) if total_drivers else 0
-                assignments = len(df)
+                summary = driver_summary(df)
 
-                col1, col2, col3, col4 = st.columns(4)
+                # KPIs
+                total_drivers = summary["driver"].nunique()
+                total_days = int(summary["total_days"].sum())
+                avg_days = round(total_days / total_drivers, 2) if total_drivers else 0
+
+                col1, col2, col3 = st.columns(3)
                 col1.metric("Drivers", total_drivers)
-                col2.metric("Total Days", total_days)
+                col2.metric("Total Working Days", total_days)
                 col3.metric("Avg Days", avg_days)
-                col4.metric("Assignments", assignments)
 
                 st.markdown("---")
-
-                summary = driver_summary(df)
 
                 st.subheader("🥇 Best Drivers")
                 st.dataframe(summary.head(5))
@@ -91,20 +77,13 @@ with tab2:
 
                 st.markdown("---")
 
-                changes = vehicle_driver_changes(df)
                 st.subheader("🔄 Driver Changes per Vehicle")
-                st.dataframe(changes.head(10))
+                st.dataframe(vehicle_driver_changes(df).head(10))
 
                 st.markdown("---")
 
-                home = driver_home_days(df)
                 st.subheader("🏠 Driver Home Days")
-                st.dataframe(home.head(10))
-
-                st.markdown("---")
-
-                st.subheader("📋 Full Driver Table")
-                st.dataframe(summary)
+                st.dataframe(driver_home_days(df).head(10))
 
         except Exception as e:
             st.error(f"Driver Error: {e}")
