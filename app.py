@@ -1,61 +1,48 @@
-import streamlit as st
-from driver_helper import process_driver_file, driver_summary, driver_query
+import pandas as pd
 
-st.set_page_config(page_title="Fleet Dashboard", layout="wide")
 
-st.title("🚛 Fleet & Driver Dashboard")
+def process_driver_file(uploaded_file):
+    df = pd.read_excel(uploaded_file)
 
-# -------------------------------
-# FILE UPLOAD
-# -------------------------------
-uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
+    df.columns = df.columns.str.strip().str.lower()
 
-if uploaded_file is not None:
+    vehicle_col = [c for c in df.columns if "vehicle" in c][0]
+    driver_col = [c for c in df.columns if "driver" in c][0]
+    days_col = [c for c in df.columns if "day" in c][0]
 
-    df = process_driver_file(uploaded_file)
+    df = df[[vehicle_col, driver_col, days_col]]
+    df.columns = ["vehicle", "driver", "days"]
 
-    # -------------------------------
-    # DRIVER SUMMARY (YOUR ORIGINAL LOGIC)
-    # -------------------------------
-    result = driver_summary(df)
+    df["vehicle"] = df["vehicle"].astype(str)
+    df["driver"] = df["driver"].astype(str)
+    df["days"] = pd.to_numeric(df["days"], errors="coerce").fillna(0)
 
-    # -------------------------------
-    # DISPLAY
-    # -------------------------------
-    tab1, tab2, tab3 = st.tabs(["📊 Driver Stats", "🔄 Changes", "🤖 Query"])
+    return df
 
-    # -------------------------------
-    # TAB 1: DRIVER STATS
-    # -------------------------------
-    with tab1:
-        st.subheader("Driver Stats")
-        st.dataframe(result["driver_stats"], use_container_width=True)
 
-    # -------------------------------
-    # TAB 2: CHANGES
-    # -------------------------------
-    with tab2:
-        st.subheader("Driver Changes")
-        st.dataframe(result["driver_changes"], use_container_width=True)
+def driver_summary(df):
+    driver_days = df.groupby("driver")["days"].sum().reset_index()
+    driver_days = driver_days.sort_values(by="days", ascending=False)
+    return driver_days
 
-        st.subheader("Vehicle Driver Changes")
-        st.dataframe(result["vehicle_changes"], use_container_width=True)
 
-    # -------------------------------
-    # TAB 3: SMART QUERY
-    # -------------------------------
-    with tab3:
-        user_input = st.text_input("Ask about driver")
+def driver_query(user_input, df):
+    text = user_input.lower()
 
-        if user_input:
-            response = driver_query(user_input, df)
-            st.text(response)
+    for driver in df["driver"].unique():
+        if driver.lower() in text:
+            d = df[df["driver"] == driver]
+            total_days = int(d["days"].sum())
+            vehicles = d["vehicle"].nunique()
 
-    # -------------------------------
-    # RAW DATA
-    # -------------------------------
-    with st.expander("🔍 Raw Data"):
-        st.dataframe(df)
+            return f"""
+Driver: {driver}
+Working Days: {total_days}
+Vehicles Driven: {vehicles}
+"""
 
-else:
-    st.info("Upload your Excel file to begin.")
+    if "top" in text:
+        top = df.groupby("driver")["days"].sum().sort_values(ascending=False).head(5)
+        return "\n".join([f"{d} → {int(v)} days" for d, v in top.items()])
+
+    return "Ask like: 'Rahul details' or 'top drivers'"
