@@ -23,9 +23,7 @@ with tab1:
     files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
 
     if files:
-        st.session_state["files"] = files
-
-        summary = fleet_summary(files)
+              summary = fleet_summary(files)
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Vehicles", summary["total_vehicles"])
