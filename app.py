@@ -2,51 +2,71 @@ import streamlit as st
 import pandas as pd
 
 from ai_helper import smart_query, fleet_summary, compare_files
+from driver_helper import (
+    process_driver_file,
+    driver_summary,
+    driver_home_days,
+    vehicle_driver_changes,
+    driver_vehicle_switch
+)
 
-st.set_page_config(page_title="Fleet Dashboard", layout="wide")
+st.set_page_config(page_title="Fleet & Driver Dashboard", layout="wide")
 
-st.title("🚚 Fleet Dashboard")
+st.title("🚛 Fleet & Driver Dashboard")
 
-files = st.file_uploader("Upload Excel files", type=["xlsx"], accept_multiple_files=True)
+tab1, tab2 = st.tabs(["Fleet", "Driver"])
 
-if files:
 
-    st.session_state["files"] = files
+# ================= FLEET =================
+with tab1:
 
-    summary = fleet_summary(files)
+    files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Vehicles", summary["total_vehicles"])
-    col2.metric("Trips", summary["total_trips"])
-    col3.metric("Idle", summary["total_idle"])
-    col4.metric("Efficiency", summary["efficiency"])
+    if files:
+        st.session_state["files"] = files
 
-    st.markdown("---")
+        summary = fleet_summary(files)
 
-    # 🔥 SEARCH (WORKING)
-    st.subheader("🔍 Search")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Vehicles", summary["total_vehicles"])
+        col2.metric("Trips", summary["total_trips"])
+        col3.metric("Idle", summary["total_idle"])
+        col4.metric("Efficiency", summary["efficiency"])
 
-    query = st.text_input("Ask anything")
+        st.subheader("🔍 Search")
+        query = st.text_input("Ask anything")
 
-    if query:
-        st.success(smart_query(query, st.session_state["files"]))
+        if query:
+            st.success(smart_query(query, st.session_state["files"]))
 
-    st.markdown("---")
+        df = pd.DataFrame(summary["vehicle_data"]).T
+        st.bar_chart(df)
 
-    df = pd.DataFrame(summary["vehicle_data"]).T
-    st.bar_chart(df)
-
-    st.markdown("---")
-
-    # 🔥 COMPARISON
     st.subheader("📊 Compare Two Files")
 
-    f1 = st.file_uploader("Previous File", type=["xlsx"], key="f1")
-    f2 = st.file_uploader("Current File", type=["xlsx"], key="f2")
+    f1 = st.file_uploader("Previous File", key="f1")
+    f2 = st.file_uploader("Current File", key="f2")
 
     if f1 and f2:
-        comp = compare_files(f1, f2)
-        st.dataframe(pd.DataFrame(comp).T)
+        st.dataframe(pd.DataFrame(compare_files(f1, f2)).T)
 
-else:
-    st.info("Upload files to start")
+
+# ================= DRIVER =================
+with tab2:
+
+    file = st.file_uploader("Upload Driver File")
+
+    if file:
+        df = process_driver_file(file)
+
+        st.subheader("Driver Summary")
+        st.dataframe(driver_summary(df))
+
+        st.subheader("Driver Home Days")
+        st.dataframe(driver_home_days(df))
+
+        st.subheader("Vehicle Driver Changes")
+        st.dataframe(vehicle_driver_changes(df))
+
+        st.subheader("Driver Vehicle Switching")
+        st.dataframe(driver_vehicle_switch(df))
