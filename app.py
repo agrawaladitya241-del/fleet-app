@@ -1,83 +1,78 @@
+import streamlit as st
 import pandas as pd
-from datetime import datetime
+
+from ai_helper import smart_query, fleet_summary, compare_files
+from driver_helper import (
+    process_driver_file,
+    driver_summary,
+    driver_home_days,
+    vehicle_driver_changes,
+    driver_vehicle_switch
+)
+
+st.set_page_config(page_title="Fleet & Driver Dashboard", layout="wide")
+
+st.title("🚛 Fleet & Driver Dashboard")
+
+tab1, tab2 = st.tabs(["Fleet", "Driver"])
 
 
-def process_driver_file(file):
-    df = pd.read_excel(file)
+# ================= FLEET =================
+with tab1:
 
-    df.columns = df.columns.str.strip().str.lower()
+    files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
 
-    def find_col(names):
-        for col in df.columns:
-            for n in names:
-                if n in col:
-                    return col
-        return None
+    if files:
+        summary = fleet_summary(files)
 
-    vehicle_col = find_col(["vehicle", "truck"])
-    driver_col = find_col(["driver"])
-    assigned_col = find_col(["assign", "date", "from"])
-    removed_col = find_col(["remove", "to", "end"])
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Vehicles", summary["total_vehicles"])
+        col2.metric("Trips", summary["total_trips"])
+        col3.metric("Idle", summary["total_idle"])
+        col4.metric("Efficiency", summary["efficiency"])
 
-    if not vehicle_col or not driver_col or not assigned_col:
-        return pd.DataFrame()
+        st.markdown("---")
 
-    cols = [vehicle_col, driver_col, assigned_col]
-    if removed_col:
-        cols.append(removed_col)
+        query = st.text_input("Ask Fleet")
 
-    df = df[cols]
+        if query:
+            st.success(smart_query(query, files))
 
-    df.columns = ["vehicle", "driver", "assigned"] + (["removed"] if removed_col else [])
+        if summary["vehicle_data"]:
+            df = pd.DataFrame(summary["vehicle_data"]).T
+            st.bar_chart(df)
 
-    df["assigned"] = pd.to_datetime(df["assigned"], errors="coerce")
+    st.markdown("---")
 
-    if "removed" in df.columns:
-        df["removed"] = pd.to_datetime(df["removed"], errors="coerce")
-    else:
-        df["removed"] = pd.NaT
+    st.subheader("📊 Compare Two Days")
 
-    today = pd.to_datetime(datetime.today().date())
-    df["removed"] = df["removed"].fillna(today)
+    f1 = st.file_uploader("Previous File", type=["xlsx"], key="f1")
+    f2 = st.file_uploader("Current File", type=["xlsx"], key="f2")
 
-    return df
+    if f1 and f2:
+        comp = compare_files(f1, f2)
+        df = pd.DataFrame(comp).T
+        st.dataframe(df)
 
 
-def driver_summary(df):
-    if df.empty:
-        return pd.DataFrame()
+# ================= DRIVER =================
+with tab2:
 
-    df["working_days"] = (df["removed"] - df["assigned"]).dt.days
-    df["working_days"] = df["working_days"].fillna(0).clip(lower=0)
+    file = st.file_uploader("Upload Driver File", type=["xlsx"])
 
-    return df.groupby("driver").agg(
-        total_days=("working_days", "sum"),
-        vehicles=("vehicle", "nunique"),
-        assignments=("vehicle", "count")
-    ).reset_index()
+    if file:
+        df = process_driver_file(file)
 
+        summary = driver_summary(df)
 
-def driver_home_days(df):
-    results = []
+        st.subheader("Driver Summary")
+        st.dataframe(summary)
 
-    for driver in df["driver"].unique():
-        d = df[df["driver"] == driver].sort_values(by="assigned")
+        st.subheader("Home Days")
+        st.dataframe(driver_home_days(df))
 
-        home_days = 0
+        st.subheader("Vehicle Driver Changes")
+        st.dataframe(vehicle_driver_changes(df))
 
-        for i in range(len(d)-1):
-            gap = (d.iloc[i+1]["assigned"] - d.iloc[i]["removed"]).days
-            if gap > 0:
-                home_days += gap
-
-        results.append({"driver": driver, "home_days": home_days})
-
-    return pd.DataFrame(results)
-
-
-def vehicle_driver_changes(df):
-    return df.groupby("vehicle")["driver"].nunique().reset_index(name="driver_changes")
-
-
-def driver_vehicle_switch(df):
-    return df.groupby("driver")["vehicle"].nunique().reset_index(name="vehicles_driven")
+        st.subheader("Driver Vehicle Switching")
+        st.dataframe(driver_vehicle_switch(df))
