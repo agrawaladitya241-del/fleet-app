@@ -105,6 +105,7 @@ def fleet_summary(files):
     }
 
 
+# 🔥 SEARCH FUNCTION (WORKING)
 def smart_query(user_input, files):
     summary = fleet_summary(files)
     data = summary["vehicle_data"]
@@ -122,9 +123,18 @@ def smart_query(user_input, files):
     if "idle" in text:
         return f"Total idle: {summary['total_idle']}"
 
-    return "Ask about trips, idle or vehicle number"
+    if "best" in text or "top" in text:
+        top = sorted(data.items(), key=lambda x: x[1]["trips"], reverse=True)[:5]
+        return "\n".join([f"{v} → {d['trips']} trips" for v, d in top])
+
+    if "worst" in text:
+        worst = sorted(data.items(), key=lambda x: x[1]["trips"])[:5]
+        return "\n".join([f"{v} → {d['trips']} trips" for v, d in worst])
+
+    return "Try: total trips, idle, best vehicles, or vehicle number"
 
 
+# 🔥 COMPARISON
 def compare_files(file1, file2):
 
     data1 = process_file(file1)
