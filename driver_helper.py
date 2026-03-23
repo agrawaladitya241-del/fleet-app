@@ -44,9 +44,6 @@ def process_driver_file(file):
 
 
 def driver_summary(df):
-    if df.empty:
-        return pd.DataFrame()
-
     df["working_days"] = (df["removed"] - df["assigned"]).dt.days
     df["working_days"] = df["working_days"].fillna(0).clip(lower=0)
 
@@ -64,9 +61,8 @@ def driver_home_days(df):
         d = df[df["driver"] == driver].sort_values(by="assigned")
 
         home_days = 0
-
-        for i in range(len(d)-1):
-            gap = (d.iloc[i+1]["assigned"] - d.iloc[i]["removed"]).days
+        for i in range(len(d) - 1):
+            gap = (d.iloc[i + 1]["assigned"] - d.iloc[i]["removed"]).days
             if gap > 0:
                 home_days += gap
 
