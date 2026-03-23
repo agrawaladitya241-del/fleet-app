@@ -33,15 +33,23 @@ with tab1:
 
         st.markdown("---")
 
-        query = st.text_input("Ask Fleet")
+        # 🔥 SEARCH BACK (THIS WAS MISSING)
+        st.subheader("🔍 Fleet Search")
+
+        query = st.text_input("Ask anything (vehicle / trips / idle)")
 
         if query:
-            st.success(smart_query(query, files))
+            answer = smart_query(query, files)
+            st.success(answer)
 
+        st.markdown("---")
+
+        # GRAPH
         if summary["vehicle_data"]:
             df = pd.DataFrame(summary["vehicle_data"]).T
             st.bar_chart(df)
 
+    # 🔥 COMPARISON
     st.markdown("---")
 
     st.subheader("📊 Compare Two Days")
