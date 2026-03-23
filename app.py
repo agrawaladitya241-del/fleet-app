@@ -23,6 +23,8 @@ with tab1:
     files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
 
     if files:
+        st.session_state["fleet_files"] = files
+
         summary = fleet_summary(files)
 
         col1, col2, col3, col4 = st.columns(4)
@@ -33,25 +35,24 @@ with tab1:
 
         st.markdown("---")
 
-        # 🔥 SEARCH BACK (THIS WAS MISSING)
+        # 🔥 SEARCH
         st.subheader("🔍 Fleet Search")
 
-        query = st.text_input("Ask anything (vehicle / trips / idle)")
+        query = st.text_input("Ask anything")
 
         if query:
-            answer = smart_query(query, files)
+            answer = smart_query(query, st.session_state["fleet_files"])
             st.success(answer)
 
         st.markdown("---")
 
-        # GRAPH
         if summary["vehicle_data"]:
             df = pd.DataFrame(summary["vehicle_data"]).T
             st.bar_chart(df)
 
-    # 🔥 COMPARISON
     st.markdown("---")
 
+    # 🔥 COMPARISON
     st.subheader("📊 Compare Two Days")
 
     f1 = st.file_uploader("Previous File", type=["xlsx"], key="f1")
