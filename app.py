@@ -108,3 +108,20 @@ with tab2:
 
     else:
         st.info("Upload driver file")
+        st.markdown("---")
+st.subheader("📊 Compare Two Days")
+
+col1, col2 = st.columns(2)
+
+file1 = col1.file_uploader("Upload Previous Day", type=["xlsx"], key="f1")
+file2 = col2.file_uploader("Upload Current Day", type=["xlsx"], key="f2")
+
+if file1 and file2:
+    from ai_helper import compare_files
+
+    comp = compare_files(file1, file2)
+
+    df = pd.DataFrame(comp).T
+
+    st.subheader("📈 Change Analysis")
+    st.dataframe(df)
