@@ -100,7 +100,6 @@ def fleet_summary(files):
     }
 
 
-# ✅ SEARCH (RESTORED)
 def smart_query(user_input, files):
     summary = fleet_summary(files)
     data = summary["vehicle_data"]
@@ -129,7 +128,6 @@ def smart_query(user_input, files):
     return "Ask about trips, idle, best, worst or vehicle number"
 
 
-# ✅ COMPARISON (ADDED SAFELY)
 def compare_files(file1, file2):
     data1 = process_file(file1)
     data2 = process_file(file2)
