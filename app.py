@@ -6,7 +6,8 @@ from driver_helper import (
     process_driver_file,
     driver_summary,
     vehicle_driver_changes,
-    driver_home_days
+    driver_home_days,
+    driver_vehicle_switch
 )
 
 st.set_page_config(page_title="Fleet & Driver Dashboard", layout="wide")
@@ -31,6 +32,13 @@ with tab1:
             col3.metric("Idle", summary["total_idle"])
             col4.metric("Efficiency", summary["efficiency"])
 
+            st.markdown("---")
+
+            query = st.text_input("Ask Fleet")
+
+            if query:
+                st.success(smart_query(query, files))
+
             if summary["vehicle_data"]:
                 df = pd.DataFrame(summary["vehicle_data"]).T
                 st.bar_chart(df)
@@ -52,7 +60,7 @@ with tab2:
             df = process_driver_file(file)
 
             if df.empty:
-                st.error("❌ Could not detect required columns (vehicle/driver/assigned)")
+                st.error("❌ Could not detect required columns")
             else:
 
                 summary = driver_summary(df)
@@ -84,6 +92,16 @@ with tab2:
 
                 st.subheader("🏠 Driver Home Days")
                 st.dataframe(driver_home_days(df).head(10))
+
+                st.markdown("---")
+
+                st.subheader("🚛 Drivers Who Switched Most Vehicles")
+                st.dataframe(driver_vehicle_switch(df).head(10))
+
+                st.markdown("---")
+
+                st.subheader("📋 Full Driver Table")
+                st.dataframe(summary)
 
         except Exception as e:
             st.error(f"Driver Error: {e}")
