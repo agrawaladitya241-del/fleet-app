@@ -1,87 +1,42 @@
 import streamlit as st
 import pandas as pd
 
-from ai_helper import smart_query, fleet_summary, compare_files
-from driver_helper import (
-    process_driver_file,
-    driver_summary,
-    driver_home_days,
-    vehicle_driver_changes,
-    driver_vehicle_switch
-)
+from ai_helper import smart_query, fleet_summary
 
-st.set_page_config(page_title="Fleet & Driver Dashboard", layout="wide")
+st.set_page_config(page_title="Fleet Dashboard", layout="wide")
 
-st.title("🚛 Fleet & Driver Dashboard")
+st.title("🚚 Fleet Dashboard")
 
-tab1, tab2 = st.tabs(["Fleet", "Driver"])
+files = st.file_uploader("Upload Excel files", type=["xlsx"], accept_multiple_files=True)
 
+if files:
 
-# ================= FLEET =================
-with tab1:
+    # store safely
+    st.session_state["files"] = files
 
-    files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
+    summary = fleet_summary(files)
 
-    if files:
-        st.session_state["fleet_files"] = files
-
-        summary = fleet_summary(files)
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Vehicles", summary["total_vehicles"])
-        col2.metric("Trips", summary["total_trips"])
-        col3.metric("Idle", summary["total_idle"])
-        col4.metric("Efficiency", summary["efficiency"])
-
-        st.markdown("---")
-
-        # 🔥 SEARCH
-        st.subheader("🔍 Fleet Search")
-
-        query = st.text_input("Ask anything")
-
-        if query:
-            answer = smart_query(query, st.session_state["fleet_files"])
-            st.success(answer)
-
-        st.markdown("---")
-
-        if summary["vehicle_data"]:
-            df = pd.DataFrame(summary["vehicle_data"]).T
-            st.bar_chart(df)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Vehicles", summary["total_vehicles"])
+    col2.metric("Trips", summary["total_trips"])
+    col3.metric("Idle", summary["total_idle"])
+    col4.metric("Efficiency", summary["efficiency"])
 
     st.markdown("---")
 
-    # 🔥 COMPARISON
-    st.subheader("📊 Compare Two Days")
+    # 🔥 SEARCH WORKING HERE
+    st.subheader("🔍 Search")
 
-    f1 = st.file_uploader("Previous File", type=["xlsx"], key="f1")
-    f2 = st.file_uploader("Current File", type=["xlsx"], key="f2")
+    query = st.text_input("Ask anything")
 
-    if f1 and f2:
-        comp = compare_files(f1, f2)
-        df = pd.DataFrame(comp).T
-        st.dataframe(df)
+    if query:
+        answer = smart_query(query, st.session_state["files"])
+        st.success(answer)
 
+    st.markdown("---")
 
-# ================= DRIVER =================
-with tab2:
+    df = pd.DataFrame(summary["vehicle_data"]).T
+    st.bar_chart(df)
 
-    file = st.file_uploader("Upload Driver File", type=["xlsx"])
-
-    if file:
-        df = process_driver_file(file)
-
-        summary = driver_summary(df)
-
-        st.subheader("Driver Summary")
-        st.dataframe(summary)
-
-        st.subheader("Home Days")
-        st.dataframe(driver_home_days(df))
-
-        st.subheader("Vehicle Driver Changes")
-        st.dataframe(vehicle_driver_changes(df))
-
-        st.subheader("Driver Vehicle Switching")
-        st.dataframe(driver_vehicle_switch(df))
+else:
+    st.info("Upload files to start")
