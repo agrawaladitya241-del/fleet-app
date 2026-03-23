@@ -1,127 +1,83 @@
-import streamlit as st
 import pandas as pd
-
-from ai_helper import smart_query, fleet_summary
-from driver_helper import (
-    process_driver_file,
-    driver_summary,
-    vehicle_driver_changes,
-    driver_home_days,
-    driver_vehicle_switch
-)
-
-st.set_page_config(page_title="Fleet & Driver Dashboard", layout="wide")
-
-st.title("🚛 Fleet & Driver Dashboard")
-
-tab1, tab2 = st.tabs(["Fleet", "Driver"])
+from datetime import datetime
 
 
-# ================= FLEET =================
-with tab1:
+def process_driver_file(file):
+    df = pd.read_excel(file)
 
-    files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
+    df.columns = df.columns.str.strip().str.lower()
 
-    if files:
-        try:
-            summary = fleet_summary(files)
+    def find_col(names):
+        for col in df.columns:
+            for n in names:
+                if n in col:
+                    return col
+        return None
 
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Vehicles", summary["total_vehicles"])
-            col2.metric("Trips", summary["total_trips"])
-            col3.metric("Idle", summary["total_idle"])
-            col4.metric("Efficiency", summary["efficiency"])
+    vehicle_col = find_col(["vehicle", "truck"])
+    driver_col = find_col(["driver"])
+    assigned_col = find_col(["assign", "date", "from"])
+    removed_col = find_col(["remove", "to", "end"])
 
-            st.markdown("---")
+    if not vehicle_col or not driver_col or not assigned_col:
+        return pd.DataFrame()
 
-            query = st.text_input("Ask Fleet")
+    cols = [vehicle_col, driver_col, assigned_col]
+    if removed_col:
+        cols.append(removed_col)
 
-            if query:
-                st.success(smart_query(query, files))
+    df = df[cols]
 
-            if summary["vehicle_data"]:
-                df = pd.DataFrame(summary["vehicle_data"]).T
-                st.bar_chart(df)
+    df.columns = ["vehicle", "driver", "assigned"] + (["removed"] if removed_col else [])
 
-        except Exception as e:
-            st.error(f"Fleet Error: {e}")
+    df["assigned"] = pd.to_datetime(df["assigned"], errors="coerce")
 
+    if "removed" in df.columns:
+        df["removed"] = pd.to_datetime(df["removed"], errors="coerce")
     else:
-        st.info("Upload fleet files")
+        df["removed"] = pd.NaT
+
+    today = pd.to_datetime(datetime.today().date())
+    df["removed"] = df["removed"].fillna(today)
+
+    return df
 
 
-# ================= DRIVER =================
-with tab2:
+def driver_summary(df):
+    if df.empty:
+        return pd.DataFrame()
 
-    file = st.file_uploader("Upload Driver File", type=["xlsx"])
+    df["working_days"] = (df["removed"] - df["assigned"]).dt.days
+    df["working_days"] = df["working_days"].fillna(0).clip(lower=0)
 
-    if file:
-        try:
-            df = process_driver_file(file)
+    return df.groupby("driver").agg(
+        total_days=("working_days", "sum"),
+        vehicles=("vehicle", "nunique"),
+        assignments=("vehicle", "count")
+    ).reset_index()
 
-            if df.empty:
-                st.error("❌ Could not detect required columns")
-            else:
 
-                summary = driver_summary(df)
+def driver_home_days(df):
+    results = []
 
-                # KPIs
-                total_drivers = summary["driver"].nunique()
-                total_days = int(summary["total_days"].sum())
-                avg_days = round(total_days / total_drivers, 2) if total_drivers else 0
+    for driver in df["driver"].unique():
+        d = df[df["driver"] == driver].sort_values(by="assigned")
 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Drivers", total_drivers)
-                col2.metric("Total Working Days", total_days)
-                col3.metric("Avg Days", avg_days)
+        home_days = 0
 
-                st.markdown("---")
+        for i in range(len(d)-1):
+            gap = (d.iloc[i+1]["assigned"] - d.iloc[i]["removed"]).days
+            if gap > 0:
+                home_days += gap
 
-                st.subheader("🥇 Best Drivers")
-                st.dataframe(summary.head(5))
+        results.append({"driver": driver, "home_days": home_days})
 
-                st.subheader("🐢 Worst Drivers")
-                st.dataframe(summary.tail(5))
+    return pd.DataFrame(results)
 
-                st.markdown("---")
 
-                st.subheader("🔄 Driver Changes per Vehicle")
-                st.dataframe(vehicle_driver_changes(df).head(10))
+def vehicle_driver_changes(df):
+    return df.groupby("vehicle")["driver"].nunique().reset_index(name="driver_changes")
 
-                st.markdown("---")
 
-                st.subheader("🏠 Driver Home Days")
-                st.dataframe(driver_home_days(df).head(10))
-
-                st.markdown("---")
-
-                st.subheader("🚛 Drivers Who Switched Most Vehicles")
-                st.dataframe(driver_vehicle_switch(df).head(10))
-
-                st.markdown("---")
-
-                st.subheader("📋 Full Driver Table")
-                st.dataframe(summary)
-
-        except Exception as e:
-            st.error(f"Driver Error: {e}")
-
-    else:
-        st.info("Upload driver file")
-        st.markdown("---")
-st.subheader("📊 Compare Two Days")
-
-col1, col2 = st.columns(2)
-
-file1 = col1.file_uploader("Upload Previous Day", type=["xlsx"], key="f1")
-file2 = col2.file_uploader("Upload Current Day", type=["xlsx"], key="f2")
-
-if file1 and file2:
-    from ai_helper import compare_files
-
-    comp = compare_files(file1, file2)
-
-    df = pd.DataFrame(comp).T
-
-    st.subheader("📈 Change Analysis")
-    st.dataframe(df)
+def driver_vehicle_switch(df):
+    return df.groupby("driver")["vehicle"].nunique().reset_index(name="vehicles_driven")
