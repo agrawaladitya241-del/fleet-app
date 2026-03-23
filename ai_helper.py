@@ -89,23 +89,18 @@ def fleet_summary(files):
     total_trips = sum(v["trips"] for v in data.values())
     total_idle = sum(v["idle"] for v in data.values())
 
-    avg_trips = round(total_trips / total_vehicles, 2) if total_vehicles else 0
-    avg_idle = round(total_idle / total_vehicles, 2) if total_vehicles else 0
-
     efficiency = round(total_trips / (total_trips + total_idle), 3) if (total_trips + total_idle) else 0
 
     return {
         "total_vehicles": total_vehicles,
         "total_trips": total_trips,
         "total_idle": total_idle,
-        "avg_trips": avg_trips,
-        "avg_idle": avg_idle,
         "efficiency": efficiency,
         "vehicle_data": data
     }
 
 
-# 🔥 SEARCH FUNCTION (WORKING)
+# 🔥 YOUR ORIGINAL SEARCH (RESTORED PROPERLY)
 def smart_query(user_input, files):
     summary = fleet_summary(files)
     data = summary["vehicle_data"]
@@ -123,7 +118,7 @@ def smart_query(user_input, files):
     if "idle" in text:
         return f"Total idle: {summary['total_idle']}"
 
-    if "best" in text or "top" in text:
+    if "best" in text:
         top = sorted(data.items(), key=lambda x: x[1]["trips"], reverse=True)[:5]
         return "\n".join([f"{v} → {d['trips']} trips" for v, d in top])
 
@@ -131,27 +126,4 @@ def smart_query(user_input, files):
         worst = sorted(data.items(), key=lambda x: x[1]["trips"])[:5]
         return "\n".join([f"{v} → {d['trips']} trips" for v, d in worst])
 
-    return "Try: total trips, idle, best vehicles, or vehicle number"
-
-
-# 🔥 COMPARISON
-def compare_files(file1, file2):
-
-    data1 = process_file(file1)
-    data2 = process_file(file2)
-
-    comparison = {}
-
-    all_vehicles = set(data1.keys()).union(set(data2.keys()))
-
-    for v in all_vehicles:
-
-        d1 = data1.get(v, {"trips": 0, "idle": 0})
-        d2 = data2.get(v, {"trips": 0, "idle": 0})
-
-        comparison[v] = {
-            "trip_change": d2["trips"] - d1["trips"],
-            "idle_change": d2["idle"] - d1["idle"]
-        }
-
-    return comparison
+    return "Ask about trips, idle, best, worst or vehicle number"
