@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-from ai_helper import smart_query, fleet_summary
+from ai_helper import smart_query, fleet_summary, compare_files
 
 st.set_page_config(page_title="Fleet Dashboard", layout="wide")
 
@@ -11,7 +11,6 @@ files = st.file_uploader("Upload Excel files", type=["xlsx"], accept_multiple_fi
 
 if files:
 
-    # store safely
     st.session_state["files"] = files
 
     summary = fleet_summary(files)
@@ -24,19 +23,30 @@ if files:
 
     st.markdown("---")
 
-    # 🔥 SEARCH WORKING HERE
+    # 🔥 SEARCH (WORKING)
     st.subheader("🔍 Search")
 
     query = st.text_input("Ask anything")
 
     if query:
-        answer = smart_query(query, st.session_state["files"])
-        st.success(answer)
+        st.success(smart_query(query, st.session_state["files"]))
 
     st.markdown("---")
 
     df = pd.DataFrame(summary["vehicle_data"]).T
     st.bar_chart(df)
+
+    st.markdown("---")
+
+    # 🔥 COMPARISON
+    st.subheader("📊 Compare Two Files")
+
+    f1 = st.file_uploader("Previous File", type=["xlsx"], key="f1")
+    f2 = st.file_uploader("Current File", type=["xlsx"], key="f2")
+
+    if f1 and f2:
+        comp = compare_files(f1, f2)
+        st.dataframe(pd.DataFrame(comp).T)
 
 else:
     st.info("Upload files to start")
