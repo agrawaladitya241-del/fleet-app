@@ -33,12 +33,14 @@ with tab1:
         col3.metric("Idle", summary["total_idle"])
         col4.metric("Efficiency", summary["efficiency"])
 
-        st.subheader("🔍 Search")
-        query = st.text_input("Ask anything")
+       st.subheader("🔍 Search")
+query = st.text_input("Ask anything")
 
-        if query:
-            st.success(smart_query(query, st.session_state["files"]))
-
+if query:
+    try:
+        st.success(smart_query(query, files))
+    except Exception as e:
+        st.error(f"Search error: {e}")
         df = pd.DataFrame(summary["vehicle_data"]).T
         st.bar_chart(df)
 
