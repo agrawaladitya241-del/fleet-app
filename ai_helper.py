@@ -1,73 +1,147 @@
-import streamlit as st
-import pandas as pd
-
-from ai_helper import smart_query, fleet_summary, compare_files
-from driver_helper import (
-    process_driver_file,
-    driver_summary,
-    driver_home_days,
-    vehicle_driver_changes,
-    driver_vehicle_switch
-)
-
-st.set_page_config(page_title="Fleet & Driver Dashboard", layout="wide")
-
-st.title("🚛 Fleet & Driver Dashboard")
-
-tab1, tab2 = st.tabs(["Fleet", "Driver"])
+import openpyxl
+import re
 
 
-# ================= FLEET =================
-with tab1:
-
-    files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
-
-    if files:
-        summary = fleet_summary(files)
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Vehicles", summary["total_vehicles"])
-        col2.metric("Trips", summary["total_trips"])
-        col3.metric("Idle", summary["total_idle"])
-        col4.metric("Efficiency", summary["efficiency"])
-
-        st.markdown("---")
-
-        if summary["vehicle_data"]:
-            df = pd.DataFrame(summary["vehicle_data"]).T
-            st.bar_chart(df)
-
-    # 🔥 COMPARISON
-    st.markdown("---")
-    st.subheader("📊 Compare Two Days")
-
-    f1 = st.file_uploader("Previous File", type=["xlsx"], key="f1")
-    f2 = st.file_uploader("Current File", type=["xlsx"], key="f2")
-
-    if f1 and f2:
-        comp = compare_files(f1, f2)
-        df = pd.DataFrame(comp).T
-        st.dataframe(df)
+def clean_vehicle(v):
+    if isinstance(v, str):
+        return v.replace(" ", "").upper()
+    return ""
 
 
-# ================= DRIVER =================
-with tab2:
+def extract_vehicle(text):
+    text = text.upper().replace(" ", "")
+    match = re.findall(r'[A-Z]{2}[0-9]{2}[A-Z]{2}[0-9]{4}', text)
+    return match[0] if match else None
 
-    file = st.file_uploader("Upload Driver File", type=["xlsx"])
 
-    if file:
-        df = process_driver_file(file)
+def process_file(uploaded_file):
+    wb = openpyxl.load_workbook(uploaded_file)
+    ws = wb.active
 
-        summary = driver_summary(df)
+    vehicle_col = None
+    trips_col = None
 
-        st.subheader("Driver Summary")
-        st.dataframe(summary)
+    for row in ws.iter_rows(min_row=1, max_row=10):
+        for i, cell in enumerate(row):
+            if cell.value:
+                text = str(cell.value).upper()
+                if "VEHICLE" in text:
+                    vehicle_col = i
+                if "TRIP" in text:
+                    trips_col = i
 
-        st.subheader("Home Days")
-        st.dataframe(driver_home_days(df))
+    data = {}
 
-        st.subheader("Vehicle Driver Changes")
-        st.dataframe(vehicle_driver_changes(df))
+    if vehicle_col is None or trips_col is None:
+        return data
 
-        st.subheader("Driver Vehicle Switching")
-        st.dataframe(driver_vehicle_switch(df))
+    for row in ws.iter_rows(min_row=2):
+
+        vehicle_raw = row[vehicle_col].value
+        if not vehicle_raw:
+            continue
+
+        vehicle = clean_vehicle(vehicle_raw)
+
+        try:
+            trips = int(row[trips_col].value)
+        except:
+            trips = 0
+
+        idle = 0
+        for i, cell in enumerate(row):
+            if i in [vehicle_col, trips_col]:
+                continue
+
+            val = str(cell.value).upper() if cell.value else ""
+            if "WAIT" in val or "PARK" in val:
+                idle += 1
+
+        if vehicle not in data:
+            data[vehicle] = {"trips": 0, "idle": 0}
+
+        data[vehicle]["trips"] += trips
+        data[vehicle]["idle"] += idle
+
+    return data
+
+
+def merge_files(files):
+    final_data = {}
+
+    for f in files:
+        file_data = process_file(f)
+
+        for v, stats in file_data.items():
+            if v not in final_data:
+                final_data[v] = {"trips": 0, "idle": 0}
+
+            final_data[v]["trips"] += stats["trips"]
+            final_data[v]["idle"] += stats["idle"]
+
+    return final_data
+
+
+def fleet_summary(files):
+    data = merge_files(files)
+
+    total_vehicles = len(data)
+    total_trips = sum(v["trips"] for v in data.values())
+    total_idle = sum(v["idle"] for v in data.values())
+
+    avg_trips = round(total_trips / total_vehicles, 2) if total_vehicles else 0
+    avg_idle = round(total_idle / total_vehicles, 2) if total_vehicles else 0
+
+    efficiency = round(total_trips / (total_trips + total_idle), 3) if (total_trips + total_idle) else 0
+
+    return {
+        "total_vehicles": total_vehicles,
+        "total_trips": total_trips,
+        "total_idle": total_idle,
+        "avg_trips": avg_trips,
+        "avg_idle": avg_idle,
+        "efficiency": efficiency,
+        "vehicle_data": data
+    }
+
+
+def smart_query(user_input, files):
+    summary = fleet_summary(files)
+    data = summary["vehicle_data"]
+
+    text = user_input.lower()
+
+    vehicle = extract_vehicle(user_input)
+    if vehicle and vehicle in data:
+        d = data[vehicle]
+        return f"{vehicle} → Trips: {d['trips']}, Idle: {d['idle']}"
+
+    if "total" in text and "trip" in text:
+        return f"Total trips: {summary['total_trips']}"
+
+    if "idle" in text:
+        return f"Total idle: {summary['total_idle']}"
+
+    return "Ask about trips, idle or vehicle number"
+
+
+def compare_files(file1, file2):
+
+    data1 = process_file(file1)
+    data2 = process_file(file2)
+
+    comparison = {}
+
+    all_vehicles = set(data1.keys()).union(set(data2.keys()))
+
+    for v in all_vehicles:
+
+        d1 = data1.get(v, {"trips": 0, "idle": 0})
+        d2 = data2.get(v, {"trips": 0, "idle": 0})
+
+        comparison[v] = {
+            "trip_change": d2["trips"] - d1["trips"],
+            "idle_change": d2["idle"] - d1["idle"]
+        }
+
+    return comparison
