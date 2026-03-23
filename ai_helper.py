@@ -174,3 +174,7 @@ def smart_query(user_input, files):
         return "\n".join([f"{v} → {d['trips']} trips" for v, d in worst])
 
     return "Ask about DP, DH, RM, AC, PARK, trips or vehicle number."
+    password = st.text_input("Enter Password", type="password")
+
+if password != "yourpass":
+    st.stop()
