@@ -20,10 +20,15 @@ tab1, tab2 = st.tabs(["Fleet", "Driver"])
 # ================= FLEET =================
 with tab1:
 
-    files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
+    files = st.file_uploader(
+        "Upload Fleet Files",
+        type=["xlsx"],
+        accept_multiple_files=True
+    )
 
     if files:
-              summary = fleet_summary(files)
+
+        summary = fleet_summary(files)
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Vehicles", summary["total_vehicles"])
@@ -31,42 +36,68 @@ with tab1:
         col3.metric("Idle", summary["total_idle"])
         col4.metric("Efficiency", summary["efficiency"])
 
-       st.subheader("🔍 Search")
-query = st.text_input("Ask anything")
+        st.markdown("---")
 
-if query:
-    try:
-        st.success(smart_query(query, files))
-    except Exception as e:
-        st.error(f"Search error: {e}")
-        df = pd.DataFrame(summary["vehicle_data"]).T
-        st.bar_chart(df)
+        # 🔥 SEARCH (FIXED - NO SESSION STATE)
+        st.subheader("🔍 Search")
+        query = st.text_input("Ask anything")
 
+        if query:
+            try:
+                answer = smart_query(query, files)
+                st.success(answer)
+            except Exception as e:
+                st.error(f"Search error: {e}")
+
+        st.markdown("---")
+
+        # GRAPH
+        if summary["vehicle_data"]:
+            df = pd.DataFrame(summary["vehicle_data"]).T
+            st.bar_chart(df)
+
+    else:
+        st.info("Upload fleet files to start")
+
+    # ================= COMPARISON =================
+    st.markdown("---")
     st.subheader("📊 Compare Two Files")
 
-    f1 = st.file_uploader("Previous File", key="f1")
-    f2 = st.file_uploader("Current File", key="f2")
+    f1 = st.file_uploader("Previous File", type=["xlsx"], key="f1")
+    f2 = st.file_uploader("Current File", type=["xlsx"], key="f2")
 
     if f1 and f2:
-        st.dataframe(pd.DataFrame(compare_files(f1, f2)).T)
+        try:
+            comp = compare_files(f1, f2)
+            df = pd.DataFrame(comp).T
+            st.dataframe(df)
+        except Exception as e:
+            st.error(f"Comparison error: {e}")
 
 
 # ================= DRIVER =================
 with tab2:
 
-    file = st.file_uploader("Upload Driver File")
+    file = st.file_uploader("Upload Driver File", type=["xlsx"])
 
     if file:
-        df = process_driver_file(file)
+        try:
+            df = process_driver_file(file)
 
-        st.subheader("Driver Summary")
-        st.dataframe(driver_summary(df))
+            st.subheader("Driver Summary")
+            st.dataframe(driver_summary(df))
 
-        st.subheader("Driver Home Days")
-        st.dataframe(driver_home_days(df))
+            st.subheader("Driver Home Days")
+            st.dataframe(driver_home_days(df))
 
-        st.subheader("Vehicle Driver Changes")
-        st.dataframe(vehicle_driver_changes(df))
+            st.subheader("Vehicle Driver Changes")
+            st.dataframe(vehicle_driver_changes(df))
 
-        st.subheader("Driver Vehicle Switching")
-        st.dataframe(driver_vehicle_switch(df))
+            st.subheader("Driver Vehicle Switching")
+            st.dataframe(driver_vehicle_switch(df))
+
+        except Exception as e:
+            st.error(f"Driver error: {e}")
+
+    else:
+        st.info("Upload driver file")
