@@ -61,14 +61,19 @@ def driver_home_days(df):
         d = df[df["driver"] == driver].sort_values(by="assigned")
 
         home_days = 0
+
         for i in range(len(d) - 1):
-            gap = (d.iloc[i + 1]["assigned"] - d.iloc[i]["removed"]).days
-            if gap > 0:
-                home_days += gap
+            prev_removed = d.iloc[i]["removed"]
+            next_assigned = d.iloc[i + 1]["assigned"]
+
+            if pd.notna(prev_removed) and pd.notna(next_assigned):
+                gap = (next_assigned - prev_removed).days
+                if gap > 0:
+                    home_days += gap
 
         results.append({"driver": driver, "home_days": home_days})
 
-    return pd.DataFrame(results)
+    return pd.DataFrame(results).sort_values(by="home_days", ascending=False)
 
 
 def vehicle_driver_changes(df):
@@ -77,3 +82,13 @@ def vehicle_driver_changes(df):
 
 def driver_vehicle_switch(df):
     return df.groupby("driver")["vehicle"].nunique().reset_index(name="vehicles_driven")
+
+
+# 🔥 NEW: VEHICLE-WISE HOME DAYS
+def vehicle_home_days(df):
+    home_df = driver_home_days(df)
+    driver_home_map = dict(zip(home_df["driver"], home_df["home_days"]))
+
+    df["home_days"] = df["driver"].map(driver_home_map)
+
+    return df.groupby("vehicle")["home_days"].sum().reset_index().sort_values(by="home_days", ascending=False)
