@@ -63,17 +63,13 @@ def driver_home_days(df):
         home_days = 0
 
         for i in range(len(d) - 1):
-            prev_removed = d.iloc[i]["removed"]
-            next_assigned = d.iloc[i + 1]["assigned"]
-
-            if pd.notna(prev_removed) and pd.notna(next_assigned):
-                gap = (next_assigned - prev_removed).days
-                if gap > 0:
-                    home_days += gap
+            gap = (d.iloc[i + 1]["assigned"] - d.iloc[i]["removed"]).days
+            if gap > 0:
+                home_days += gap
 
         results.append({"driver": driver, "home_days": home_days})
 
-    return pd.DataFrame(results).sort_values(by="home_days", ascending=False)
+    return pd.DataFrame(results)
 
 
 def vehicle_driver_changes(df):
@@ -84,11 +80,42 @@ def driver_vehicle_switch(df):
     return df.groupby("driver")["vehicle"].nunique().reset_index(name="vehicles_driven")
 
 
-# 🔥 NEW: VEHICLE-WISE HOME DAYS
 def vehicle_home_days(df):
     home_df = driver_home_days(df)
     driver_home_map = dict(zip(home_df["driver"], home_df["home_days"]))
 
     df["home_days"] = df["driver"].map(driver_home_map)
 
-    return df.groupby("vehicle")["home_days"].sum().reset_index().sort_values(by="home_days", ascending=False)
+    return df.groupby("vehicle")["home_days"].sum().reset_index()
+
+
+# 🔥 DRIVER SEARCH
+def driver_query(user_input, df):
+
+    text = user_input.lower()
+
+    summary = driver_summary(df)
+    home = driver_home_days(df)
+    switch = driver_vehicle_switch(df)
+
+    merged = summary.merge(home, on="driver", how="left")
+    merged = merged.merge(switch, on="driver", how="left")
+
+    for driver in merged["driver"]:
+        if driver.lower() in text:
+            d = merged[merged["driver"] == driver].iloc[0]
+            return f"{driver} → Days: {d['total_days']}, Home: {d['home_days']}, Vehicles: {d['vehicles_driven']}"
+
+    if "top" in text:
+        top = merged.sort_values(by="total_days", ascending=False).head(5)
+        return "\n".join([f"{r['driver']} → {r['total_days']} days" for _, r in top.iterrows()])
+
+    if "home" in text:
+        top = merged.sort_values(by="home_days", ascending=False).head(5)
+        return "\n".join([f"{r['driver']} → {r['home_days']} home days" for _, r in top.iterrows()])
+
+    if "vehicle" in text or "switch" in text:
+        top = merged.sort_values(by="vehicles_driven", ascending=False).head(5)
+        return "\n".join([f"{r['driver']} → {r['vehicles_driven']} vehicles" for _, r in top.iterrows()])
+
+    return "Try: top drivers, home days, or driver name"
