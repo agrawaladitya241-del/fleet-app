@@ -8,7 +8,8 @@ from driver_helper import (
     driver_home_days,
     vehicle_driver_changes,
     driver_vehicle_switch,
-    vehicle_home_days
+    vehicle_home_days,
+    driver_query
 )
 
 st.set_page_config(page_title="Fleet & Driver Dashboard", layout="wide")
@@ -33,7 +34,7 @@ with tab1:
         col3.metric("Idle", summary["total_idle"])
         col4.metric("Efficiency", summary["efficiency"])
 
-        st.subheader("🔍 Search")
+        st.subheader("🔍 Fleet Search")
         query = st.text_input("Ask anything")
 
         if query:
@@ -59,6 +60,12 @@ with tab2:
     if file:
         df = process_driver_file(file)
 
+        st.subheader("🔍 Driver Search")
+        q = st.text_input("Ask about drivers")
+
+        if q:
+            st.success(driver_query(q, df))
+
         st.subheader("Driver Summary")
         st.dataframe(driver_summary(df))
 
@@ -71,5 +78,5 @@ with tab2:
         st.subheader("Driver Vehicle Switching")
         st.dataframe(driver_vehicle_switch(df))
 
-        st.subheader("🚛 Vehicle-wise Home Days")
+        st.subheader("Vehicle-wise Home Days")
         st.dataframe(vehicle_home_days(df))
