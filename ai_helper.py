@@ -129,6 +129,7 @@ def smart_query(user_input, files):
 
 
 def compare_files(file1, file2):
+
     data1 = process_file(file1)
     data2 = process_file(file2)
 
