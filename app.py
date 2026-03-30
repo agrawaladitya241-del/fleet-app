@@ -81,9 +81,6 @@ with tab1:
         # SAVE DRIVER DATA
         save_driver_data(df)
 
-        # 🔥 NEW STATUS DATA
-        status_df = extract_dp_dh_status(file)
-
         st.subheader("🔍 Driver Search")
         q = st.text_input("Ask about drivers")
 
@@ -93,33 +90,17 @@ with tab1:
         st.subheader("Driver Summary")
         st.dataframe(driver_summary(df))
 
-        st.subheader("Driver Home Days (OLD LOGIC)")
+        st.subheader("Driver Home Days")
         st.dataframe(driver_home_days(df))
 
-        # ================= NEW DASHBOARD =================
-        st.subheader("🚛 Live Truck Status Dashboard")
+        st.subheader("Vehicle Driver Changes")
+        st.dataframe(vehicle_driver_changes(df))
 
-        col1, col2, col3 = st.columns(3)
+        st.subheader("Driver Vehicle Switching")
+        st.dataframe(driver_vehicle_switch(df))
 
-        col1.metric("Active Trucks", len(status_df[status_df["status_type"] == "Active"]))
-        col2.metric("Driver Home (DH)", len(status_df[status_df["status_type"] == "Driver Home"]))
-        col3.metric("Delayed (DP)", len(status_df[status_df["status_type"] == "Delay"]))
-
-        st.subheader("📊 Top DH Drivers")
-        st.dataframe(status_df.sort_values(by="DH", ascending=False).head(10))
-
-        st.subheader("📊 Top DP Drivers")
-        st.dataframe(status_df.sort_values(by="DP", ascending=False).head(10))
-
-        st.subheader("🚛 Active Trucks")
-        st.dataframe(status_df[status_df["status_type"] == "Active"])
-
-        st.subheader("🚛 Driver Home Trucks")
-        st.dataframe(status_df[status_df["status_type"] == "Driver Home"])
-
-        st.subheader("🚛 Delayed Trucks")
-        st.dataframe(status_df[status_df["status_type"] == "Delay"])
-
+        st.subheader("Vehicle-wise Home Days")
+        st.dataframe(vehicle_home_days(df))
 
 # ================= MONTHLY ANALYTICS =================
 with tab3:
