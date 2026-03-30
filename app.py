@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 import openpyxl
-import re
 
 from driver_helper import (
     process_driver_file,
@@ -16,7 +15,7 @@ from driver_helper import (
 from database import save_fleet_data, save_driver_data, get_monthly_fleet
 
 
-# ================= BASIC FLEET PROCESSING =================
+# ================= FLEET PROCESSING =================
 def process_file(uploaded_file):
     wb = openpyxl.load_workbook(uploaded_file)
     ws = wb.active
@@ -147,6 +146,28 @@ def extract_fleet_status(files):
     return pd.DataFrame(final).T.reset_index().rename(columns={"index": "vehicle"})
 
 
+# ================= COMPARE FUNCTION =================
+def compare_files(file1, file2):
+
+    data1 = process_file(file1)
+    data2 = process_file(file2)
+
+    result = {}
+
+    vehicles = set(data1.keys()).union(set(data2.keys()))
+
+    for v in vehicles:
+        d1 = data1.get(v, {"trips": 0, "idle": 0})
+        d2 = data2.get(v, {"trips": 0, "idle": 0})
+
+        result[v] = {
+            "trip_change": d2["trips"] - d1["trips"],
+            "idle_change": d2["idle"] - d1["idle"]
+        }
+
+    return result
+
+
 # ================= APP =================
 st.set_page_config(page_title="Fleet Intelligence System", layout="wide")
 st.title("🚛 Fleet Intelligence System")
@@ -154,7 +175,7 @@ st.title("🚛 Fleet Intelligence System")
 tab1, tab2, tab3 = st.tabs(["Fleet", "Driver", "Monthly"])
 
 
-# ================= FLEET =================
+# ================= FLEET TAB =================
 with tab1:
 
     files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
@@ -172,33 +193,55 @@ with tab1:
         col3.metric("Idle", summary["total_idle"])
         col4.metric("Efficiency", summary["efficiency"])
 
-        st.subheader("🚛 Status Dashboard")
+        st.subheader("🚛 Fleet Status Dashboard")
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("Active", len(status_df[status_df["status_type"] == "Active"]))
-        c2.metric("DH", len(status_df[status_df["status_type"] == "Driver Home"]))
-        c3.metric("DP", len(status_df[status_df["status_type"] == "Delay"]))
+        c1.metric("Active Trucks", len(status_df[status_df["status_type"] == "Active"]))
+        c2.metric("Driver Home (DH)", len(status_df[status_df["status_type"] == "Driver Home"]))
+        c3.metric("Delayed (DP)", len(status_df[status_df["status_type"] == "Delay"]))
 
+        st.subheader("📊 Vehicle Status Table")
         st.dataframe(status_df)
 
+        st.subheader("🔥 Top DH Vehicles")
+        st.dataframe(status_df.sort_values(by="DH", ascending=False).head(10))
 
-# ================= DRIVER =================
+        st.subheader("🔥 Top DP Vehicles")
+        st.dataframe(status_df.sort_values(by="DP", ascending=False).head(10))
+
+    # ===== COMPARE FILES =====
+    st.subheader("📊 Compare Two Files")
+
+    f1 = st.file_uploader("Previous File", key="f1")
+    f2 = st.file_uploader("Current File", key="f2")
+
+    if f1 and f2:
+        st.dataframe(pd.DataFrame(compare_files(f1, f2)).T)
+
+
+# ================= DRIVER TAB =================
 with tab2:
 
     file = st.file_uploader("Upload Driver File")
 
     if file:
         df = process_driver_file(file)
+
         save_driver_data(df)
 
+        st.subheader("Driver Summary")
         st.dataframe(driver_summary(df))
+
+        st.subheader("Driver Home Days")
         st.dataframe(driver_home_days(df))
 
 
-# ================= MONTHLY =================
+# ================= MONTHLY TAB =================
 with tab3:
 
     monthly = get_monthly_fleet()
 
     if not monthly.empty:
         st.dataframe(monthly)
+    else:
+        st.info("No data yet")
