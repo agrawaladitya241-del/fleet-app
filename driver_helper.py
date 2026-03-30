@@ -2,6 +2,7 @@ import pandas as pd
 from datetime import datetime
 
 
+# ================= EXISTING LOGIC (UNCHANGED) =================
 def process_driver_file(file):
     df = pd.read_excel(file)
 
@@ -89,7 +90,58 @@ def vehicle_home_days(df):
     return df.groupby("vehicle")["home_days"].sum().reset_index()
 
 
-# 🔥 DRIVER SEARCH
+# ================= NEW LOGIC (DP / DH / STATUS) =================
+def extract_dp_dh_status(file):
+    df = pd.read_excel(file)
+    df.columns = df.columns.astype(str)
+
+    results = []
+
+    for _, row in df.iterrows():
+
+        row_values = [str(x).upper() for x in row if pd.notna(x)]
+
+        dh_count = sum(1 for x in row_values if "DH" in x)
+        dp_count = sum(1 for x in row_values if "DP" in x)
+
+        # Get driver + vehicle safely
+        driver = ""
+        vehicle = ""
+
+        for col in df.columns:
+            if "driver" in col.lower():
+                driver = row[col]
+            if "vehicle" in col.lower() or "truck" in col.lower():
+                vehicle = row[col]
+
+        # Last non-empty cell
+        current_status = ""
+        for val in reversed(row_values):
+            if val.strip():
+                current_status = val
+                break
+
+        # Status classification
+        if "DH" in current_status:
+            status_type = "Driver Home"
+        elif "DP" in current_status:
+            status_type = "Delay"
+        else:
+            status_type = "Active"
+
+        results.append({
+            "driver": driver,
+            "vehicle": vehicle,
+            "DH": dh_count,
+            "DP": dp_count,
+            "current_status": current_status,
+            "status_type": status_type
+        })
+
+    return pd.DataFrame(results)
+
+
+# ================= DRIVER SEARCH (UNCHANGED) =================
 def driver_query(user_input, df):
 
     text = user_input.lower()
