@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 
-from ai_helper import smart_query, fleet_summary, compare_files
+from ai_helper import smart_query, fleet_summary, extract_fleet_status, compare_files
 from driver_helper import (
     process_driver_file,
     driver_summary,
@@ -33,6 +33,7 @@ with tab1:
         # 🔥 NEW STATUS DATA
         status_df = extract_fleet_status(files)
 
+        # SAVE TO DATABASE
         save_fleet_data(summary["vehicle_data"], str(date.today()))
 
         col1, col2, col3, col4 = st.columns(4)
@@ -59,7 +60,7 @@ with tab1:
         st.subheader("🔥 Top DP Vehicles")
         st.dataframe(status_df.sort_values(by="DP", ascending=False).head(10))
 
-        # ================= EXISTING SEARCH =================
+        # ================= SEARCH =================
         st.subheader("🔍 Fleet Search")
         query = st.text_input("Ask anything")
 
@@ -69,9 +70,17 @@ with tab1:
         df = pd.DataFrame(summary["vehicle_data"]).T
         st.bar_chart(df)
 
+    st.subheader("📊 Compare Two Files")
+
+    f1 = st.file_uploader("Previous File", key="f1")
+    f2 = st.file_uploader("Current File", key="f2")
+
+    if f1 and f2:
+        st.dataframe(pd.DataFrame(compare_files(f1, f2)).T)
+
 
 # ================= DRIVER =================
-    with tab2:
+with tab2:
 
     file = st.file_uploader("Upload Driver File")
 
@@ -101,6 +110,7 @@ with tab1:
 
         st.subheader("Vehicle-wise Home Days")
         st.dataframe(vehicle_home_days(df))
+
 
 # ================= MONTHLY ANALYTICS =================
 with tab3:
