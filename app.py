@@ -30,7 +30,9 @@ with tab1:
 
         summary = fleet_summary(files)
 
-        # SAVE TO DATABASE
+        # 🔥 NEW STATUS DATA
+        status_df = extract_fleet_status(files)
+
         save_fleet_data(summary["vehicle_data"], str(date.today()))
 
         col1, col2, col3, col4 = st.columns(4)
@@ -39,6 +41,25 @@ with tab1:
         col3.metric("Idle", summary["total_idle"])
         col4.metric("Efficiency", summary["efficiency"])
 
+        # ================= STATUS DASHBOARD =================
+        st.subheader("🚛 Fleet Status Dashboard")
+
+        c1, c2, c3 = st.columns(3)
+
+        c1.metric("Active Trucks", len(status_df[status_df["status_type"] == "Active"]))
+        c2.metric("Driver Home (DH)", len(status_df[status_df["status_type"] == "Driver Home"]))
+        c3.metric("Delayed (DP)", len(status_df[status_df["status_type"] == "Delay"]))
+
+        st.subheader("📊 Vehicle Status Table")
+        st.dataframe(status_df)
+
+        st.subheader("🔥 Top DH Vehicles")
+        st.dataframe(status_df.sort_values(by="DH", ascending=False).head(10))
+
+        st.subheader("🔥 Top DP Vehicles")
+        st.dataframe(status_df.sort_values(by="DP", ascending=False).head(10))
+
+        # ================= EXISTING SEARCH =================
         st.subheader("🔍 Fleet Search")
         query = st.text_input("Ask anything")
 
@@ -47,14 +68,6 @@ with tab1:
 
         df = pd.DataFrame(summary["vehicle_data"]).T
         st.bar_chart(df)
-
-    st.subheader("📊 Compare Two Files")
-
-    f1 = st.file_uploader("Previous File", key="f1")
-    f2 = st.file_uploader("Current File", key="f2")
-
-    if f1 and f2:
-        st.dataframe(pd.DataFrame(compare_files(f1, f2)).T)
 
 
 # ================= DRIVER =================
