@@ -1,5 +1,6 @@
 import openpyxl
 import re
+import pandas as pd
 
 
 def clean_vehicle(v):
@@ -14,6 +15,7 @@ def extract_vehicle(text):
     return match[0] if match else None
 
 
+# ================= EXISTING FLEET LOGIC =================
 def process_file(uploaded_file):
     wb = openpyxl.load_workbook(uploaded_file)
     ws = wb.active
@@ -100,6 +102,62 @@ def fleet_summary(files):
     }
 
 
+# ================= NEW: DH / DP / STATUS =================
+def extract_fleet_status(files):
+
+    final = {}
+
+    for file in files:
+        df = pd.read_excel(file)
+        df.columns = df.columns.astype(str)
+
+        for _, row in df.iterrows():
+
+            vehicle = None
+
+            for col in df.columns:
+                if "vehicle" in col.lower():
+                    vehicle = str(row[col]).strip().upper()
+                    break
+
+            if not vehicle or vehicle == "NAN":
+                continue
+
+            row_values = [str(x).upper() for x in row if pd.notna(x)]
+
+            dh = sum(1 for x in row_values if "DH" in x)
+            dp = sum(1 for x in row_values if "DP" in x)
+
+            current_status = ""
+            for val in reversed(row_values):
+                if val.strip():
+                    current_status = val
+                    break
+
+            if "DH" in current_status:
+                status_type = "Driver Home"
+            elif "DP" in current_status:
+                status_type = "Delay"
+            else:
+                status_type = "Active"
+
+            if vehicle not in final:
+                final[vehicle] = {
+                    "DH": 0,
+                    "DP": 0,
+                    "status": current_status,
+                    "status_type": status_type
+                }
+
+            final[vehicle]["DH"] += dh
+            final[vehicle]["DP"] += dp
+            final[vehicle]["status"] = current_status
+            final[vehicle]["status_type"] = status_type
+
+    return pd.DataFrame.from_dict(final, orient="index").reset_index().rename(columns={"index": "vehicle"})
+
+
+# ================= SEARCH =================
 def smart_query(user_input, files):
     summary = fleet_summary(files)
     data = summary["vehicle_data"]
@@ -126,24 +184,3 @@ def smart_query(user_input, files):
         return "\n".join([f"{v} → {d['trips']} trips" for v, d in worst])
 
     return "Ask about trips, idle, best, worst or vehicle number"
-
-
-def compare_files(file1, file2):
-
-    data1 = process_file(file1)
-    data2 = process_file(file2)
-
-    result = {}
-
-    vehicles = set(data1.keys()).union(set(data2.keys()))
-
-    for v in vehicles:
-        d1 = data1.get(v, {"trips": 0, "idle": 0})
-        d2 = data2.get(v, {"trips": 0, "idle": 0})
-
-        result[v] = {
-            "trip_change": d2["trips"] - d1["trips"],
-            "idle_change": d2["idle"] - d1["idle"]
-        }
-
-    return result
