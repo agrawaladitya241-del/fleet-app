@@ -184,3 +184,58 @@ def smart_query(user_input, files):
         return "\n".join([f"{v} → {d['trips']} trips" for v, d in worst])
 
     return "Ask about trips, idle, best, worst or vehicle number"
+
+def extract_fleet_status(files):
+
+    import pandas as pd
+
+    final = {}
+
+    for file in files:
+        df = pd.read_excel(file)
+        df.columns = df.columns.astype(str)
+
+        for _, row in df.iterrows():
+
+            vehicle = None
+
+            for col in df.columns:
+                if "vehicle" in col.lower():
+                    vehicle = str(row[col]).strip().upper()
+                    break
+
+            if not vehicle or vehicle == "NAN":
+                continue
+
+            row_values = [str(x).upper() for x in row if pd.notna(x)]
+
+            dh = sum(1 for x in row_values if "DH" in x)
+            dp = sum(1 for x in row_values if "DP" in x)
+
+            current_status = ""
+            for val in reversed(row_values):
+                if val.strip():
+                    current_status = val
+                    break
+
+            if "DH" in current_status:
+                status_type = "Driver Home"
+            elif "DP" in current_status:
+                status_type = "Delay"
+            else:
+                status_type = "Active"
+
+            if vehicle not in final:
+                final[vehicle] = {
+                    "DH": 0,
+                    "DP": 0,
+                    "status": current_status,
+                    "status_type": status_type
+                }
+
+            final[vehicle]["DH"] += dh
+            final[vehicle]["DP"] += dp
+            final[vehicle]["status"] = current_status
+            final[vehicle]["status_type"] = status_type
+
+    return pd.DataFrame.from_dict(final, orient="index").reset_index().rename(columns={"index": "vehicle"})
