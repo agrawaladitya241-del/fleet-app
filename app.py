@@ -14,7 +14,6 @@ from driver_helper import (
     driver_query
 )
 from database import save_fleet_data, save_driver_data, get_monthly_fleet
-from ai_helper import parse_query, run_query, generate_insights
 
 
 # ================= GET LATEST FILE =================
@@ -155,26 +154,50 @@ def extract_fleet_status(file):
     return pd.DataFrame(final).T.reset_index().rename(columns={"index": "vehicle"})
 
 
-# ================= COMPARE =================
-def compare_files(file1, file2):
+# ================= MONTHLY ANALYSIS =================
+def monthly_analysis(file):
 
-    data1 = process_file(file1)
-    data2 = process_file(file2)
+    df = pd.read_excel(file)
 
-    result = {}
+    vehicle_col = None
 
-    vehicles = set(data1.keys()).union(set(data2.keys()))
+    for col in df.columns:
+        if "vehicle" in str(col).lower():
+            vehicle_col = col
+            break
 
-    for v in vehicles:
-        d1 = data1.get(v, {"trips": 0, "idle": 0})
-        d2 = data2.get(v, {"trips": 0, "idle": 0})
+    if vehicle_col is None:
+        return None, "Vehicle column not found"
 
-        result[v] = {
-            "trip_change": d2["trips"] - d1["trips"],
-            "idle_change": d2["idle"] - d1["idle"]
-        }
+    results = []
 
-    return result
+    for _, row in df.iterrows():
+
+        vehicle = str(row[vehicle_col]).strip().upper()
+
+        if not vehicle or vehicle == "NAN":
+            continue
+
+        row_values = [str(x).upper() for x in row if pd.notna(x)]
+
+        total_days = len(row_values)
+
+        dp = sum(1 for x in row_values if "DP" in x)
+        dh = sum(1 for x in row_values if "DH" in x)
+        trips = sum(1 for x in row_values if "TRIP" in x)
+
+        results.append({
+            "vehicle": vehicle,
+            "DP": dp,
+            "DH": dh,
+            "Trips": trips,
+            "Days": total_days,
+            "Avg_DP": round(dp / total_days, 2) if total_days else 0,
+            "Avg_DH": round(dh / total_days, 2) if total_days else 0,
+            "Avg_Trips": round(trips / total_days, 2) if total_days else 0
+        })
+
+    return pd.DataFrame(results), None
 
 
 # ================= APP =================
@@ -196,10 +219,6 @@ with tab1:
         summary = fleet_summary([latest_file])
         status_df = extract_fleet_status(latest_file)
 
-        # 🔥 CRITICAL FIX: RAW DATA FOR AI
-        raw_df = pd.read_excel(latest_file)
-        latest_df = raw_df.copy()
-
         save_fleet_data(summary["vehicle_data"], str(date.today()))
 
         col1, col2, col3, col4 = st.columns(4)
@@ -215,39 +234,32 @@ with tab1:
         c2.metric("Driver Home (DH)", len(status_df[status_df["status_type"] == "Driver Home"]))
         c3.metric("Delayed (DP)", len(status_df[status_df["status_type"] == "Delay"]))
 
-        st.subheader("📊 Vehicle Status Table")
         st.dataframe(status_df)
 
-        st.subheader("🔥 Top DH Vehicles")
-        st.dataframe(status_df.sort_values(by="DH", ascending=False).head(10))
-
-        st.subheader("🔥 Top DP Vehicles")
-        st.dataframe(status_df.sort_values(by="DP", ascending=False).head(10))
-
-        # ================= AI =================
+        # ================= MONTHLY INTELLIGENCE =================
         st.divider()
-        st.subheader("🤖 Fleet AI Assistant")
+        st.subheader("📊 Monthly Fleet Intelligence")
 
-        user_query = st.text_input("Ask something")
+        monthly_df, error = monthly_analysis(latest_file)
 
-        if st.button("Run AI Query"):
-            intent_data = parse_query(user_query)
-            result = run_query(intent_data, latest_df)
+        if error:
+            st.warning(error)
+        else:
 
-            st.write("### 📊 Result")
+            col1, col2, col3 = st.columns(3)
 
-            if isinstance(result, str):
-                st.warning(result)
-            else:
-                st.dataframe(result)
+            col1.metric("Avg Delay (DP)", round(monthly_df["DP"].mean(), 2))
+            col2.metric("Avg Driver Home (DH)", round(monthly_df["DH"].mean(), 2))
+            col3.metric("Avg Trips", round(monthly_df["Trips"].mean(), 2))
 
-        # ================= INSIGHTS =================
-        st.subheader("📊 Smart Insights")
+            st.subheader("🚨 Worst Performing Vehicles (High DP)")
+            st.dataframe(monthly_df.sort_values(by="DP", ascending=False).head(10))
 
-        insights = generate_insights(latest_df)
+            st.subheader("🏠 Most Driver Home Vehicles")
+            st.dataframe(monthly_df.sort_values(by="DH", ascending=False).head(10))
 
-        for ins in insights:
-            st.info(ins)
+            st.subheader("🚛 Top Performing Vehicles")
+            st.dataframe(monthly_df.sort_values(by="Trips", ascending=False).head(10))
 
 
 # ================= DRIVER =================
