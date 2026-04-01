@@ -255,3 +255,36 @@ with tab3:
         st.dataframe(monthly)
     else:
         st.info("Upload fleet files first")
+
+
+# ================================
+# AI SECTION (SAFE ADDITION)
+# ================================
+import streamlit as st
+
+st.divider()
+st.subheader("🤖 Fleet AI Assistant")
+
+user_query = st.text_input("Ask something (e.g., top 5 idle trucks, delayed trucks)")
+
+if st.button("Run AI Query"):
+    if user_query:
+        intent_data = parse_query(user_query)
+        result = run_query(intent_data, latest_df)
+
+        st.write("### 📊 Result")
+
+        if isinstance(result, str):
+            st.warning(result)
+        else:
+            st.dataframe(result)
+
+# ================================
+# INSIGHTS
+# ================================
+st.subheader("📊 Smart Insights")
+
+insights = generate_insights(latest_df)
+
+for ins in insights:
+    st.info(ins)
