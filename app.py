@@ -26,12 +26,13 @@ def get_latest_file(files):
     return sorted(dated_files, reverse=True)[0][1]
 
 
-# ================= FLEET =================
-def process_file(file):
-    wb = openpyxl.load_workbook(file)
+# ================= ORIGINAL FLEET PROCESS =================
+def process_file(uploaded_file):
+    wb = openpyxl.load_workbook(uploaded_file)
     ws = wb.active
 
-    vehicle_col = trips_col = None
+    vehicle_col = None
+    trips_col = None
 
     for row in ws.iter_rows(min_row=1, max_row=10):
         for i, cell in enumerate(row):
@@ -45,10 +46,12 @@ def process_file(file):
     data = {}
 
     for row in ws.iter_rows(min_row=2):
-        if not row[vehicle_col].value:
+
+        vehicle_raw = row[vehicle_col].value
+        if not vehicle_raw:
             continue
 
-        vehicle = str(row[vehicle_col].value).upper().replace(" ", "")
+        vehicle = str(vehicle_raw).replace(" ", "").upper()
 
         try:
             trips = float(row[trips_col].value)
@@ -59,6 +62,7 @@ def process_file(file):
         for i, cell in enumerate(row):
             if i in [vehicle_col, trips_col]:
                 continue
+
             val = str(cell.value).upper() if cell.value else ""
             if "WAIT" in val or "PARK" in val:
                 idle += 1
@@ -70,6 +74,55 @@ def process_file(file):
         data[vehicle]["idle"] += idle
 
     return data
+
+
+# ================= FLEET SUMMARY =================
+def fleet_summary(file):
+    data = process_file(file)
+
+    total_vehicles = len(data)
+    total_trips = sum(v["trips"] for v in data.values())
+    total_idle = sum(v["idle"] for v in data.values())
+
+    efficiency = round(total_trips / (total_trips + total_idle), 3) if (total_trips + total_idle) else 0
+
+    return data, total_vehicles, int(total_trips), total_idle, efficiency
+
+
+# ================= STATUS =================
+def extract_fleet_status(file):
+
+    df = pd.read_excel(file)
+    final = {}
+
+    for _, row in df.iterrows():
+
+        vehicle = None
+        for col in df.columns:
+            if "vehicle" in str(col).lower():
+                vehicle = str(row[col]).strip().upper()
+                break
+
+        if not vehicle:
+            continue
+
+        values = [str(x).upper() for x in row if pd.notna(x)]
+
+        dp = sum(1 for x in values if "DP" in x)
+        dh = sum(1 for x in values if "DH" in x)
+
+        current_status = values[-1]
+
+        if "DP" in current_status:
+            status = "Delay"
+        elif "DH" in current_status:
+            status = "Driver Home"
+        else:
+            status = "Active"
+
+        final[vehicle] = {"DP": dp, "DH": dh, "status_type": status}
+
+    return pd.DataFrame(final).T.reset_index().rename(columns={"index": "vehicle"})
 
 
 # ================= MONTHLY =================
@@ -88,7 +141,6 @@ def monthly_analysis(file):
     for _, row in df.iterrows():
 
         vehicle = str(row[vehicle_col]).strip().upper()
-
         if not vehicle:
             continue
 
@@ -122,69 +174,58 @@ def monthly_analysis(file):
     return pd.DataFrame(results)
 
 
-# ================= DRIVER INTELLIGENCE =================
-def driver_intelligence(df):
-
-    high_dh = df[df["DH"] > df["DH"].mean()]
-    low_trips = df[df["Trips"] < df["Trips"].mean()]
-
-    return high_dh, low_trips
-
-
-# ================= ASSIGNMENT SUGGESTIONS =================
-def assignment_suggestions(df):
-
-    suggestions = []
-
-    problem = df[df["DP"] > df["DP"].mean()]
-    idle = df[df["Trips"] < df["Trips"].mean()]
-
-    if len(problem) > 0:
-        suggestions.append("⚠️ Reassign better drivers to high delay vehicles")
-
-    if len(idle) > 0:
-        suggestions.append("📉 Some vehicles underutilized — increase allocation")
-
-    good = df[df["Trips"] > df["Trips"].mean()]
-    if len(good) > 0:
-        suggestions.append("✅ High performing vehicles can handle more load")
-
-    return suggestions
+# ================= MANAGER FUNCTIONS =================
+def get_consistent(df):
+    return df[
+        (df["Trips"] > df["Trips"].mean()) &
+        (df["DP"] < df["DP"].mean()) &
+        (df["DH"] < df["DH"].mean())
+    ]
 
 
-# ================= MONTHLY SUMMARY =================
-def monthly_summary(df):
-
-    total = len(df)
-
-    dp_vehicles = len(df[df["DP"] > 0])
-    dh_vehicles = len(df[df["DH"] > 0])
-
-    return {
-        "total": total,
-        "dp": dp_vehicles,
-        "dh": dh_vehicles,
-        "dp_percent": round((dp_vehicles / total) * 100, 2),
-        "dh_percent": round((dh_vehicles / total) * 100, 2)
-    }
+def get_problem(df):
+    return df[
+        (df["DP"] > df["DP"].mean()) |
+        (df["DH"] > df["DH"].mean())
+    ]
 
 
-# ================= REPORT =================
-def generate_report(df):
+def get_critical(df):
+    return df[
+        (df["DP"] > df["DP"].mean() * 1.5) |
+        (df["DH"] > df["DH"].mean() * 1.5)
+    ]
 
-    summary = monthly_summary(df)
 
-    report = f"""
-Fleet Monthly Report:
+def add_score(df):
+    df = df.copy()
+    df["Score"] = df["Trips"] - (df["DP"] * 5) - (df["DH"] * 3)
+    return df.sort_values(by="Score", ascending=False)
 
-Total Vehicles: {summary['total']}
-Vehicles with Delay (DP): {summary['dp']} ({summary['dp_percent']}%)
-Vehicles with Driver Home (DH): {summary['dh']} ({summary['dh_percent']}%)
 
-Overall, delays and driver issues indicate areas requiring operational attention.
-"""
+def recommendations(df):
+    recs = []
+    if len(df[df["DP"] > df["DP"].mean()]) > 0:
+        recs.append("⚠️ High delay vehicles detected")
+    if len(df[df["DH"] > df["DH"].mean()]) > 0:
+        recs.append("⚠️ Driver availability issues detected")
+    return recs
 
-    return report
+
+# ================= SMART QUERY =================
+def smart_query(q, df):
+    q = q.lower()
+
+    if "dp" in q:
+        return df.sort_values(by="DP", ascending=False).head(10)
+    if "dh" in q:
+        return df.sort_values(by="DH", ascending=False).head(10)
+    if "trip" in q:
+        return df.sort_values(by="Trips", ascending=False).head(10)
+    if "score" in q:
+        return add_score(df).head(10)
+
+    return "Query not understood"
 
 
 # ================= APP =================
@@ -202,39 +243,52 @@ with tab1:
 
         latest_file = get_latest_file(files)
 
-        data = process_file(latest_file)
-        df = monthly_analysis(latest_file)
+        data, total_v, trips, idle, eff = fleet_summary(latest_file)
+        status_df = extract_fleet_status(latest_file)
+        monthly_df = monthly_analysis(latest_file)
 
         save_fleet_data(data, str(date.today()))
 
-        # ================= SUMMARY =================
-        summary = monthly_summary(df)
+        # ORIGINAL METRICS
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Vehicles", total_v)
+        c2.metric("Trips", trips)
+        c3.metric("Idle", idle)
+        c4.metric("Efficiency", eff)
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Vehicles", summary["total"])
-        c2.metric("Vehicles with DP", summary["dp"])
-        c3.metric("Vehicles with DH", summary["dh"])
+        # STATUS
+        st.subheader("Fleet Status")
+        st.dataframe(status_df)
 
-        # ================= DRIVER INTELLIGENCE =================
-        st.subheader("🧠 Driver Intelligence")
+        # MANAGER DASHBOARD
+        st.divider()
+        st.subheader("Manager Dashboard")
 
-        dh_issues, low_perf = driver_intelligence(df)
+        st.dataframe(get_critical(monthly_df).head(10))
 
-        st.write("Driver Issues (High DH)")
-        st.dataframe(dh_issues.head(10))
+        st.subheader("Consistent Vehicles")
+        st.dataframe(get_consistent(monthly_df).head(10))
 
-        st.write("Low Performance Vehicles")
-        st.dataframe(low_perf.head(10))
+        st.subheader("Problem Vehicles")
+        st.dataframe(get_problem(monthly_df).head(10))
 
-        # ================= ASSIGNMENT =================
-        st.subheader("🚛 Assignment Suggestions")
+        st.subheader("Performance Ranking")
+        st.dataframe(add_score(monthly_df).head(10))
 
-        for s in assignment_suggestions(df):
-            st.info(s)
+        st.subheader("Recommendations")
+        for r in recommendations(monthly_df):
+            st.warning(r)
 
-        # ================= REPORT =================
-        st.subheader("📄 Monthly Report")
-        st.text(generate_report(df))
+        # QUERY
+        st.subheader("Smart Query")
+        q = st.text_input("Ask query")
+
+        if st.button("Run Query"):
+            res = smart_query(q, monthly_df)
+            if isinstance(res, str):
+                st.warning(res)
+            else:
+                st.dataframe(res)
 
 
 with tab2:
