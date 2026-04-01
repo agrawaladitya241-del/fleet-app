@@ -196,8 +196,9 @@ with tab1:
         summary = fleet_summary([latest_file])
         status_df = extract_fleet_status(latest_file)
 
-        # ✅ THIS IS THE FIX (VERY IMPORTANT)
-        latest_df = status_df.copy()
+        # 🔥 CRITICAL FIX: RAW DATA FOR AI
+        raw_df = pd.read_excel(latest_file)
+        latest_df = raw_df.copy()
 
         save_fleet_data(summary["vehicle_data"], str(date.today()))
 
@@ -223,7 +224,7 @@ with tab1:
         st.subheader("🔥 Top DP Vehicles")
         st.dataframe(status_df.sort_values(by="DP", ascending=False).head(10))
 
-        # ================= AI SECTION =================
+        # ================= AI =================
         st.divider()
         st.subheader("🤖 Fleet AI Assistant")
 
