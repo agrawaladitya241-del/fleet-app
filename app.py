@@ -209,6 +209,37 @@ def monthly_analysis(file):
     return pd.DataFrame(results)
 
 
+# ================= CONSISTENT VEHICLES =================
+def get_consistent_vehicles(df):
+    return df[
+        (df["Days"] > df["Days"].mean() * 0.7) &
+        (df["DP"] < df["DP"].mean()) &
+        (df["DH"] < df["DH"].mean())
+    ].sort_values(by="Trips", ascending=False)
+
+
+# ================= PROBLEM VEHICLES =================
+def get_problem_vehicles(df):
+    return df[
+        (df["DP"] > df["DP"].mean()) |
+        (df["DH"] > df["DH"].mean())
+    ].sort_values(by="DP", ascending=False)
+
+
+# ================= SCORING =================
+def add_performance_score(df):
+
+    df = df.copy()
+
+    df["Score"] = (
+        df["Trips"]
+        - (df["DP"] * 5)
+        - (df["DH"] * 3)
+    )
+
+    return df.sort_values(by="Score", ascending=False)
+
+
 # ================= SMART QUERY =================
 def smart_query(query, df):
 
@@ -223,8 +254,8 @@ def smart_query(query, df):
     if "trip" in query:
         return df.sort_values(by="Trips", ascending=False).head(10)
 
-    if "active" in query:
-        return df[df["status_type"] == "Active"]
+    if "score" in query:
+        return add_performance_score(df).head(10)
 
     return "Query not understood"
 
@@ -236,7 +267,6 @@ st.title("🚛 Fleet Intelligence System")
 tab1, tab2 = st.tabs(["Fleet", "Driver"])
 
 
-# ================= FLEET =================
 with tab1:
 
     files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
@@ -268,31 +298,41 @@ with tab1:
 
         st.dataframe(status_df)
 
-        # MONTHLY INTELLIGENCE
+        # MONTHLY
         st.divider()
         st.subheader("📊 Monthly Intelligence")
 
-        if monthly_df is not None:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Avg DP", round(monthly_df["DP"].mean(), 2))
+        m2.metric("Avg DH", round(monthly_df["DH"].mean(), 2))
+        m3.metric("Avg Trips", round(monthly_df["Trips"].mean(), 2))
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Avg DP", round(monthly_df["DP"].mean(), 2))
-            m2.metric("Avg DH", round(monthly_df["DH"].mean(), 2))
-            m3.metric("Avg Trips", round(monthly_df["Trips"].mean(), 2))
+        st.subheader("🚨 Top Delay Vehicles")
+        st.dataframe(monthly_df.sort_values(by="DP", ascending=False).head(10))
 
-            st.subheader("🚨 Top Delay Vehicles")
-            st.dataframe(monthly_df.sort_values(by="DP", ascending=False).head(10))
+        st.subheader("🏠 Driver Issues")
+        st.dataframe(monthly_df.sort_values(by="DH", ascending=False).head(10))
 
-            st.subheader("🏠 Driver Issues")
-            st.dataframe(monthly_df.sort_values(by="DH", ascending=False).head(10))
+        st.subheader("🚛 Best Vehicles")
+        st.dataframe(monthly_df.sort_values(by="Trips", ascending=False).head(10))
 
-            st.subheader("🚛 Best Vehicles")
-            st.dataframe(monthly_df.sort_values(by="Trips", ascending=False).head(10))
+        # CONSISTENT
+        st.subheader("✅ Consistent Vehicles")
+        st.dataframe(get_consistent_vehicles(monthly_df).head(10))
 
-        # SMART QUERY
+        # PROBLEM
+        st.subheader("❌ Problem Vehicles")
+        st.dataframe(get_problem_vehicles(monthly_df).head(10))
+
+        # SCORE
+        st.subheader("🏆 Performance Ranking")
+        st.dataframe(add_performance_score(monthly_df).head(10))
+
+        # QUERY
         st.divider()
         st.subheader("🔍 Smart Query")
 
-        query = st.text_input("Ask (e.g., top dp, top trips)")
+        query = st.text_input("Ask (e.g., top dp, top trips, score)")
 
         if st.button("Run Query"):
 
