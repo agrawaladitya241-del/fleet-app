@@ -14,137 +14,17 @@ from database import save_fleet_data, save_driver_data
 
 # ================= GET LATEST FILE =================
 def get_latest_file(files):
-
     dated_files = []
-
     for f in files:
         name = f.name
-
         match = re.search(r'(\d{2})\.(\d{2})', name)
         if match:
             day, month = match.groups()
             date_key = int(month) * 100 + int(day)
             dated_files.append((date_key, f))
-
     if not dated_files:
         return files[-1]
-
     return sorted(dated_files, reverse=True)[0][1]
-
-
-# ================= FLEET PROCESSING =================
-def process_file(uploaded_file):
-    wb = openpyxl.load_workbook(uploaded_file)
-    ws = wb.active
-
-    vehicle_col = None
-    trips_col = None
-
-    for row in ws.iter_rows(min_row=1, max_row=10):
-        for i, cell in enumerate(row):
-            if cell.value:
-                text = str(cell.value).upper()
-                if "VEHICLE" in text:
-                    vehicle_col = i
-                if "TRIP" in text:
-                    trips_col = i
-
-    data = {}
-
-    if vehicle_col is None or trips_col is None:
-        return data
-
-    for row in ws.iter_rows(min_row=2):
-
-        vehicle_raw = row[vehicle_col].value
-        if not vehicle_raw:
-            continue
-
-        vehicle = str(vehicle_raw).replace(" ", "").upper()
-
-        try:
-            trips = float(row[trips_col].value)
-        except:
-            trips = 0
-
-        idle = 0
-        for i, cell in enumerate(row):
-            if i in [vehicle_col, trips_col]:
-                continue
-
-            val = str(cell.value).upper() if cell.value else ""
-            if "WAIT" in val or "PARK" in val:
-                idle += 1
-
-        if vehicle not in data:
-            data[vehicle] = {"trips": 0, "idle": 0}
-
-        data[vehicle]["trips"] += trips
-        data[vehicle]["idle"] += idle
-
-    return data
-
-
-def fleet_summary(files):
-    data = process_file(files[0])
-
-    total_vehicles = len(data)
-    total_trips = sum(v["trips"] for v in data.values())
-    total_idle = sum(v["idle"] for v in data.values())
-
-    efficiency = round(total_trips / (total_trips + total_idle), 3) if (total_trips + total_idle) else 0
-
-    return {
-        "total_vehicles": total_vehicles,
-        "total_trips": int(total_trips),
-        "total_idle": total_idle,
-        "efficiency": efficiency,
-        "vehicle_data": data
-    }
-
-
-# ================= STATUS =================
-def extract_fleet_status(file):
-
-    final = {}
-    df = pd.read_excel(file)
-
-    for _, row in df.iterrows():
-
-        vehicle = None
-        for col in df.columns:
-            if "vehicle" in str(col).lower():
-                vehicle = str(row[col]).strip().upper()
-                break
-
-        if not vehicle or vehicle == "NAN":
-            continue
-
-        row_values = [str(x).upper() for x in row if pd.notna(x)]
-
-        dh = sum(1 for x in row_values if "DH" in x)
-        dp = sum(1 for x in row_values if "DP" in x)
-
-        current_status = ""
-        for val in reversed(row_values):
-            if val.strip():
-                current_status = val
-                break
-
-        if "DH" in current_status:
-            status_type = "Driver Home"
-        elif "DP" in current_status:
-            status_type = "Delay"
-        else:
-            status_type = "Active"
-
-        final[vehicle] = {
-            "DH": dh,
-            "DP": dp,
-            "status_type": status_type
-        }
-
-    return pd.DataFrame(final).T.reset_index().rename(columns={"index": "vehicle"})
 
 
 # ================= MONTHLY ANALYSIS =================
@@ -158,9 +38,6 @@ def monthly_analysis(file):
             vehicle_col = col
             break
 
-    if vehicle_col is None:
-        return None
-
     results = []
 
     for _, row in df.iterrows():
@@ -170,10 +47,7 @@ def monthly_analysis(file):
         if not vehicle or vehicle == "NAN":
             continue
 
-        dp = 0
-        dh = 0
-        trips = 0
-        days = 0
+        dp = dh = trips = days = 0
 
         for val in row:
 
@@ -200,16 +74,13 @@ def monthly_analysis(file):
             "DP": dp,
             "DH": dh,
             "Trips": trips,
-            "Days": days,
-            "Avg_DP": round(dp / days, 2) if days else 0,
-            "Avg_DH": round(dh / days, 2) if days else 0,
-            "Avg_Trips": round(trips / days, 2) if days else 0
+            "Days": days
         })
 
     return pd.DataFrame(results)
 
 
-# ================= CONSISTENT VEHICLES =================
+# ================= CONSISTENT =================
 def get_consistent_vehicles(df):
     return df[
         (df["Days"] > df["Days"].mean() * 0.7) &
@@ -218,7 +89,7 @@ def get_consistent_vehicles(df):
     ].sort_values(by="Trips", ascending=False)
 
 
-# ================= PROBLEM VEHICLES =================
+# ================= PROBLEM =================
 def get_problem_vehicles(df):
     return df[
         (df["DP"] > df["DP"].mean()) |
@@ -226,8 +97,32 @@ def get_problem_vehicles(df):
     ].sort_values(by="DP", ascending=False)
 
 
+# ================= REPEATED OFFENDERS =================
+def get_repeated_offenders(df):
+
+    high_dp = df[df["DP"] > df["DP"].mean()]
+    high_dh = df[df["DH"] > df["DH"].mean()]
+
+    return high_dp, high_dh
+
+
+# ================= TREND DETECTION =================
+def detect_trend(df):
+
+    df = df.copy()
+
+    df["Trend"] = df.apply(
+        lambda x: "⬇️ Dropping"
+        if x["Trips"] < df["Trips"].mean()
+        else "⬆️ Good",
+        axis=1
+    )
+
+    return df
+
+
 # ================= SCORING =================
-def add_performance_score(df):
+def add_score(df):
 
     df = df.copy()
 
@@ -240,24 +135,22 @@ def add_performance_score(df):
     return df.sort_values(by="Score", ascending=False)
 
 
-# ================= SMART QUERY =================
-def smart_query(query, df):
+# ================= ALERT SYSTEM =================
+def add_alerts(df):
 
-    query = query.lower()
+    df = df.copy()
 
-    if "dp" in query:
-        return df.sort_values(by="DP", ascending=False).head(10)
+    def classify(row):
+        if row["DP"] > df["DP"].mean():
+            return "🔴 Critical"
+        elif row["DH"] > df["DH"].mean():
+            return "🟡 Warning"
+        else:
+            return "🟢 Good"
 
-    if "dh" in query:
-        return df.sort_values(by="DH", ascending=False).head(10)
+    df["Alert"] = df.apply(classify, axis=1)
 
-    if "trip" in query:
-        return df.sort_values(by="Trips", ascending=False).head(10)
-
-    if "score" in query:
-        return add_performance_score(df).head(10)
-
-    return "Query not understood"
+    return df
 
 
 # ================= APP =================
@@ -274,74 +167,44 @@ with tab1:
     if files:
 
         latest_file = get_latest_file(files)
+        df = monthly_analysis(latest_file)
 
-        summary = fleet_summary([latest_file])
-        status_df = extract_fleet_status(latest_file)
-        monthly_df = monthly_analysis(latest_file)
+        # ================= METRICS =================
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Avg DP", round(df["DP"].mean(), 2))
+        col2.metric("Avg DH", round(df["DH"].mean(), 2))
+        col3.metric("Avg Trips", round(df["Trips"].mean(), 2))
 
-        save_fleet_data(summary["vehicle_data"], str(date.today()))
-
-        # TOP METRICS
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Vehicles", summary["total_vehicles"])
-        col2.metric("Trips", summary["total_trips"])
-        col3.metric("Idle", summary["total_idle"])
-        col4.metric("Efficiency", summary["efficiency"])
-
-        # STATUS
-        st.subheader("🚛 Fleet Status Dashboard")
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Active", len(status_df[status_df["status_type"] == "Active"]))
-        c2.metric("Driver Home", len(status_df[status_df["status_type"] == "Driver Home"]))
-        c3.metric("Delayed", len(status_df[status_df["status_type"] == "Delay"]))
-
-        st.dataframe(status_df)
-
-        # MONTHLY
-        st.divider()
-        st.subheader("📊 Monthly Intelligence")
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Avg DP", round(monthly_df["DP"].mean(), 2))
-        m2.metric("Avg DH", round(monthly_df["DH"].mean(), 2))
-        m3.metric("Avg Trips", round(monthly_df["Trips"].mean(), 2))
-
-        st.subheader("🚨 Top Delay Vehicles")
-        st.dataframe(monthly_df.sort_values(by="DP", ascending=False).head(10))
-
-        st.subheader("🏠 Driver Issues")
-        st.dataframe(monthly_df.sort_values(by="DH", ascending=False).head(10))
-
-        st.subheader("🚛 Best Vehicles")
-        st.dataframe(monthly_df.sort_values(by="Trips", ascending=False).head(10))
-
-        # CONSISTENT
+        # ================= CONSISTENT =================
         st.subheader("✅ Consistent Vehicles")
-        st.dataframe(get_consistent_vehicles(monthly_df).head(10))
+        st.dataframe(get_consistent_vehicles(df).head(10))
 
-        # PROBLEM
+        # ================= PROBLEM =================
         st.subheader("❌ Problem Vehicles")
-        st.dataframe(get_problem_vehicles(monthly_df).head(10))
+        st.dataframe(get_problem_vehicles(df).head(10))
 
-        # SCORE
-        st.subheader("🏆 Performance Ranking")
-        st.dataframe(add_performance_score(monthly_df).head(10))
+        # ================= REPEATED =================
+        st.subheader("🔁 Repeated Offenders")
 
-        # QUERY
-        st.divider()
-        st.subheader("🔍 Smart Query")
+        dp_off, dh_off = get_repeated_offenders(df)
 
-        query = st.text_input("Ask (e.g., top dp, top trips, score)")
+        st.write("High Delay Vehicles")
+        st.dataframe(dp_off.head(10))
 
-        if st.button("Run Query"):
+        st.write("High Driver Home Vehicles")
+        st.dataframe(dh_off.head(10))
 
-            result = smart_query(query, monthly_df)
+        # ================= TREND =================
+        st.subheader("📉 Trend Detection")
+        st.dataframe(detect_trend(df).head(20))
 
-            if isinstance(result, str):
-                st.warning(result)
-            else:
-                st.dataframe(result)
+        # ================= SCORE =================
+        st.subheader("🏆 Performance Score")
+        st.dataframe(add_score(df).head(10))
+
+        # ================= ALERT =================
+        st.subheader("🚨 Alerts")
+        st.dataframe(add_alerts(df).head(20))
 
 
 # ================= DRIVER =================
