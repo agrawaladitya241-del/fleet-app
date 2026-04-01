@@ -92,7 +92,7 @@ def process_file(uploaded_file):
 
 
 def fleet_summary(files):
-    data = process_file(files[0])  # only one file now
+    data = process_file(files[0])
 
     total_vehicles = len(data)
     total_trips = sum(v["trips"] for v in data.values())
@@ -196,6 +196,9 @@ with tab1:
         summary = fleet_summary([latest_file])
         status_df = extract_fleet_status(latest_file)
 
+        # ✅ THIS IS THE FIX (VERY IMPORTANT)
+        latest_df = status_df.copy()
+
         save_fleet_data(summary["vehicle_data"], str(date.today()))
 
         col1, col2, col3, col4 = st.columns(4)
@@ -220,13 +223,30 @@ with tab1:
         st.subheader("🔥 Top DP Vehicles")
         st.dataframe(status_df.sort_values(by="DP", ascending=False).head(10))
 
-    st.subheader("📊 Compare Two Files")
+        # ================= AI SECTION =================
+        st.divider()
+        st.subheader("🤖 Fleet AI Assistant")
 
-    f1 = st.file_uploader("Previous File", key="f1")
-    f2 = st.file_uploader("Current File", key="f2")
+        user_query = st.text_input("Ask something")
 
-    if f1 and f2:
-        st.dataframe(pd.DataFrame(compare_files(f1, f2)).T)
+        if st.button("Run AI Query"):
+            intent_data = parse_query(user_query)
+            result = run_query(intent_data, latest_df)
+
+            st.write("### 📊 Result")
+
+            if isinstance(result, str):
+                st.warning(result)
+            else:
+                st.dataframe(result)
+
+        # ================= INSIGHTS =================
+        st.subheader("📊 Smart Insights")
+
+        insights = generate_insights(latest_df)
+
+        for ins in insights:
+            st.info(ins)
 
 
 # ================= DRIVER =================
@@ -255,36 +275,3 @@ with tab3:
         st.dataframe(monthly)
     else:
         st.info("Upload fleet files first")
-
-
-# ================================
-# AI SECTION (SAFE ADDITION)
-# ================================
-import streamlit as st
-
-st.divider()
-st.subheader("🤖 Fleet AI Assistant")
-
-user_query = st.text_input("Ask something (e.g., top 5 idle trucks, delayed trucks)")
-
-if st.button("Run AI Query"):
-    if user_query:
-        intent_data = parse_query(user_query)
-        result = run_query(intent_data, latest_df)
-
-        st.write("### 📊 Result")
-
-        if isinstance(result, str):
-            st.warning(result)
-        else:
-            st.dataframe(result)
-
-# ================================
-# INSIGHTS
-# ================================
-st.subheader("📊 Smart Insights")
-
-insights = generate_insights(latest_df)
-
-for ins in insights:
-    st.info(ins)
