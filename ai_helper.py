@@ -1,241 +1,94 @@
-import openpyxl
+# ai_helper.py
+
 import re
-import pandas as pd
 
+# ================================
+# SAFE COLUMN FINDER (prevents crashes)
+# ================================
+def get_column(df, possible_names):
+    for col in df.columns:
+        for name in possible_names:
+            if name.lower() in col.lower():
+                return col
+    return None
 
-def clean_vehicle(v):
-    if isinstance(v, str):
-        return v.replace(" ", "").upper()
-    return ""
 
+# ================================
+# INTENT PARSER
+# ================================
+def parse_query(query: str):
+    query = query.lower()
 
-def extract_vehicle(text):
-    text = text.upper().replace(" ", "")
-    match = re.findall(r'[A-Z]{2}[0-9]{2}[A-Z]{2}[0-9]{4}', text)
-    return match[0] if match else None
+    if "delay" in query or "delayed" in query:
+        return {"intent": "delayed_trucks"}
 
+    if "idle" in query and "top" in query:
+        numbers = re.findall(r'\d+', query)
+        top_n = int(numbers[0]) if numbers else 5
+        return {"intent": "top_idle", "n": top_n}
 
-# ================= EXISTING FLEET LOGIC =================
-def process_file(uploaded_file):
-    wb = openpyxl.load_workbook(uploaded_file)
-    ws = wb.active
+    if "active" in query:
+        return {"intent": "active_trucks"}
 
-    vehicle_col = None
-    trips_col = None
+    return {"intent": "unknown"}
 
-    for row in ws.iter_rows(min_row=1, max_row=10):
-        for i, cell in enumerate(row):
-            if cell.value:
-                text = str(cell.value).upper()
-                if "VEHICLE" in text:
-                    vehicle_col = i
-                if "TRIP" in text:
-                    trips_col = i
 
-    data = {}
+# ================================
+# QUERY ENGINE
+# ================================
+def run_query(intent_data, df):
+    intent = intent_data["intent"]
 
-    if vehicle_col is None or trips_col is None:
-        return data
+    remarks_col = get_column(df, ["remarks", "comment"])
+    idle_col = get_column(df, ["idle"])
+    trips_col = get_column(df, ["trip"])
 
-    for row in ws.iter_rows(min_row=2):
+    try:
+        if intent == "delayed_trucks":
+            if remarks_col:
+                return df[df[remarks_col].astype(str).str.contains("DP", na=False)]
+            return "❌ Remarks column not found"
 
-        vehicle_raw = row[vehicle_col].value
-        if not vehicle_raw:
-            continue
+        if intent == "top_idle":
+            if idle_col:
+                n = intent_data.get("n", 5)
+                return df.sort_values(by=idle_col, ascending=False).head(n)
+            return "❌ Idle column not found"
 
-        vehicle = clean_vehicle(vehicle_raw)
+        if intent == "active_trucks":
+            if trips_col:
+                return df[df[trips_col] > 0]
+            return "❌ Trips column not found"
 
-        try:
-            trips = int(row[trips_col].value)
-        except:
-            trips = 0
+        return "❌ Query not understood"
 
-        idle = 0
-        for i, cell in enumerate(row):
-            if i in [vehicle_col, trips_col]:
-                continue
+    except Exception as e:
+        return f"Error: {e}"
 
-            val = str(cell.value).upper() if cell.value else ""
-            if "WAIT" in val or "PARK" in val:
-                idle += 1
 
-        if vehicle not in data:
-            data[vehicle] = {"trips": 0, "idle": 0}
+# ================================
+# INSIGHTS ENGINE
+# ================================
+def generate_insights(df):
+    insights = []
 
-        data[vehicle]["trips"] += trips
-        data[vehicle]["idle"] += idle
+    idle_col = get_column(df, ["idle"])
+    remarks_col = get_column(df, ["remarks", "comment"])
 
-    return data
+    try:
+        if idle_col:
+            avg_idle = df[idle_col].mean()
+            high_idle = df[df[idle_col] > avg_idle]
 
+            if not high_idle.empty:
+                insights.append(f"⚠️ {len(high_idle)} vehicles have above-average idle time")
 
-def merge_files(files):
-    final_data = {}
+        if remarks_col:
+            delays = df[df[remarks_col].astype(str).str.contains("DP", na=False)]
+            if len(delays) > 5:
+                insights.append("🚨 High number of delayed trucks today")
 
-    for f in files:
-        file_data = process_file(f)
+    except:
+        insights.append("⚠️ Insight generation partially failed")
 
-        for v, stats in file_data.items():
-            if v not in final_data:
-                final_data[v] = {"trips": 0, "idle": 0}
-
-            final_data[v]["trips"] += stats["trips"]
-            final_data[v]["idle"] += stats["idle"]
-
-    return final_data
-
-
-def fleet_summary(files):
-    data = merge_files(files)
-
-    total_vehicles = len(data)
-    total_trips = sum(v["trips"] for v in data.values())
-    total_idle = sum(v["idle"] for v in data.values())
-
-    efficiency = round(total_trips / (total_trips + total_idle), 3) if (total_trips + total_idle) else 0
-
-    return {
-        "total_vehicles": total_vehicles,
-        "total_trips": total_trips,
-        "total_idle": total_idle,
-        "efficiency": efficiency,
-        "vehicle_data": data
-    }
-
-
-# ================= NEW: DH / DP / STATUS =================
-def extract_fleet_status(files):
-
-    final = {}
-
-    for file in files:
-        df = pd.read_excel(file)
-        df.columns = df.columns.astype(str)
-
-        for _, row in df.iterrows():
-
-            vehicle = None
-
-            for col in df.columns:
-                if "vehicle" in col.lower():
-                    vehicle = str(row[col]).strip().upper()
-                    break
-
-            if not vehicle or vehicle == "NAN":
-                continue
-
-            row_values = [str(x).upper() for x in row if pd.notna(x)]
-
-            dh = sum(1 for x in row_values if "DH" in x)
-            dp = sum(1 for x in row_values if "DP" in x)
-
-            current_status = ""
-            for val in reversed(row_values):
-                if val.strip():
-                    current_status = val
-                    break
-
-            if "DH" in current_status:
-                status_type = "Driver Home"
-            elif "DP" in current_status:
-                status_type = "Delay"
-            else:
-                status_type = "Active"
-
-            if vehicle not in final:
-                final[vehicle] = {
-                    "DH": 0,
-                    "DP": 0,
-                    "status": current_status,
-                    "status_type": status_type
-                }
-
-            final[vehicle]["DH"] += dh
-            final[vehicle]["DP"] += dp
-            final[vehicle]["status"] = current_status
-            final[vehicle]["status_type"] = status_type
-
-    return pd.DataFrame.from_dict(final, orient="index").reset_index().rename(columns={"index": "vehicle"})
-
-
-# ================= SEARCH =================
-def smart_query(user_input, files):
-    summary = fleet_summary(files)
-    data = summary["vehicle_data"]
-
-    text = user_input.lower()
-
-    vehicle = extract_vehicle(user_input)
-    if vehicle and vehicle in data:
-        d = data[vehicle]
-        return f"{vehicle} → Trips: {d['trips']}, Idle: {d['idle']}"
-
-    if "total" in text and "trip" in text:
-        return f"Total trips: {summary['total_trips']}"
-
-    if "idle" in text:
-        return f"Total idle: {summary['total_idle']}"
-
-    if "best" in text:
-        top = sorted(data.items(), key=lambda x: x[1]["trips"], reverse=True)[:5]
-        return "\n".join([f"{v} → {d['trips']} trips" for v, d in top])
-
-    if "worst" in text:
-        worst = sorted(data.items(), key=lambda x: x[1]["trips"])[:5]
-        return "\n".join([f"{v} → {d['trips']} trips" for v, d in worst])
-
-    return "Ask about trips, idle, best, worst or vehicle number"
-
-def extract_fleet_status(files):
-
-    import pandas as pd
-
-    final = {}
-
-    for file in files:
-        df = pd.read_excel(file)
-        df.columns = df.columns.astype(str)
-
-        for _, row in df.iterrows():
-
-            vehicle = None
-
-            for col in df.columns:
-                if "vehicle" in col.lower():
-                    vehicle = str(row[col]).strip().upper()
-                    break
-
-            if not vehicle or vehicle == "NAN":
-                continue
-
-            row_values = [str(x).upper() for x in row if pd.notna(x)]
-
-            dh = sum(1 for x in row_values if "DH" in x)
-            dp = sum(1 for x in row_values if "DP" in x)
-
-            current_status = ""
-            for val in reversed(row_values):
-                if val.strip():
-                    current_status = val
-                    break
-
-            if "DH" in current_status:
-                status_type = "Driver Home"
-            elif "DP" in current_status:
-                status_type = "Delay"
-            else:
-                status_type = "Active"
-
-            if vehicle not in final:
-                final[vehicle] = {
-                    "DH": 0,
-                    "DP": 0,
-                    "status": current_status,
-                    "status_type": status_type
-                }
-
-            final[vehicle]["DH"] += dh
-            final[vehicle]["DP"] += dp
-            final[vehicle]["status"] = current_status
-            final[vehicle]["status_type"] = status_type
-
-    return pd.DataFrame.from_dict(final, orient="index").reset_index().rename(columns={"index": "vehicle"})
+    return insights
