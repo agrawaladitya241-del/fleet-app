@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 import openpyxl
+import re
 
 from driver_helper import (
     process_driver_file,
@@ -13,6 +14,27 @@ from driver_helper import (
     driver_query
 )
 from database import save_fleet_data, save_driver_data, get_monthly_fleet
+
+
+# ================= GET LATEST FILE =================
+def get_latest_file(files):
+
+    dated_files = []
+
+    for f in files:
+        name = f.name
+
+        match = re.search(r'(\d{2})\.(\d{2})', name)
+        if match:
+            day, month = match.groups()
+            date_key = int(month) * 100 + int(day)
+            dated_files.append((date_key, f))
+
+    if not dated_files:
+        return files[-1]
+
+    latest = sorted(dated_files, reverse=True)[0][1]
+    return latest
 
 
 # ================= FLEET PROCESSING =================
@@ -68,20 +90,8 @@ def process_file(uploaded_file):
     return data
 
 
-def merge_files(files):
-    final = {}
-    for f in files:
-        data = process_file(f)
-        for v, d in data.items():
-            if v not in final:
-                final[v] = {"trips": 0, "idle": 0}
-            final[v]["trips"] += d["trips"]
-            final[v]["idle"] += d["idle"]
-    return final
-
-
 def fleet_summary(files):
-    data = merge_files(files)
+    data = process_file(files[0])  # only one file now
 
     total_vehicles = len(data)
     total_trips = sum(v["trips"] for v in data.values())
@@ -98,55 +108,53 @@ def fleet_summary(files):
     }
 
 
-# ================= DH / DP STATUS =================
-def extract_fleet_status(files):
+# ================= DH / DP =================
+def extract_fleet_status(file):
 
     final = {}
 
-    for file in files:
-        df = pd.read_excel(file)
+    df = pd.read_excel(file)
 
-        for _, row in df.iterrows():
+    for _, row in df.iterrows():
 
-            vehicle = None
-            for col in df.columns:
-                if "vehicle" in str(col).lower():
-                    vehicle = str(row[col]).strip().upper()
-                    break
+        vehicle = None
+        for col in df.columns:
+            if "vehicle" in str(col).lower():
+                vehicle = str(row[col]).strip().upper()
+                break
 
-            if not vehicle or vehicle == "NAN":
-                continue
+        if not vehicle or vehicle == "NAN":
+            continue
 
-            row_values = [str(x).upper() for x in row if pd.notna(x)]
+        row_values = [str(x).upper() for x in row if pd.notna(x)]
 
-            dh = sum(1 for x in row_values if "DH" in x)
-            dp = sum(1 for x in row_values if "DP" in x)
+        dh = sum(1 for x in row_values if "DH" in x)
+        dp = sum(1 for x in row_values if "DP" in x)
 
-            current_status = ""
-            for val in reversed(row_values):
-                if val.strip():
-                    current_status = val
-                    break
+        current_status = ""
+        for val in reversed(row_values):
+            if val.strip():
+                current_status = val
+                break
 
-            if "DH" in current_status:
-                status_type = "Driver Home"
-            elif "DP" in current_status:
-                status_type = "Delay"
-            else:
-                status_type = "Active"
+        if "DH" in current_status:
+            status_type = "Driver Home"
+        elif "DP" in current_status:
+            status_type = "Delay"
+        else:
+            status_type = "Active"
 
-            if vehicle not in final:
-                final[vehicle] = {"DH": 0, "DP": 0, "status": "", "status_type": ""}
-
-            final[vehicle]["DH"] += dh
-            final[vehicle]["DP"] += dp
-            final[vehicle]["status"] = current_status
-            final[vehicle]["status_type"] = status_type
+        final[vehicle] = {
+            "DH": dh,
+            "DP": dp,
+            "status": current_status,
+            "status_type": status_type
+        }
 
     return pd.DataFrame(final).T.reset_index().rename(columns={"index": "vehicle"})
 
 
-# ================= COMPARE FUNCTION =================
+# ================= COMPARE =================
 def compare_files(file1, file2):
 
     data1 = process_file(file1)
@@ -175,15 +183,17 @@ st.title("🚛 Fleet Intelligence System")
 tab1, tab2, tab3 = st.tabs(["Fleet", "Driver", "Monthly"])
 
 
-# ================= FLEET TAB =================
+# ================= FLEET =================
 with tab1:
 
     files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
 
     if files:
 
-        summary = fleet_summary(files)
-        status_df = extract_fleet_status(files)
+        latest_file = get_latest_file(files)
+
+        summary = fleet_summary([latest_file])
+        status_df = extract_fleet_status(latest_file)
 
         save_fleet_data(summary["vehicle_data"], str(date.today()))
 
@@ -209,7 +219,6 @@ with tab1:
         st.subheader("🔥 Top DP Vehicles")
         st.dataframe(status_df.sort_values(by="DP", ascending=False).head(10))
 
-    # ===== COMPARE FILES =====
     st.subheader("📊 Compare Two Files")
 
     f1 = st.file_uploader("Previous File", key="f1")
@@ -219,7 +228,7 @@ with tab1:
         st.dataframe(pd.DataFrame(compare_files(f1, f2)).T)
 
 
-# ================= DRIVER TAB =================
+# ================= DRIVER =================
 with tab2:
 
     file = st.file_uploader("Upload Driver File")
@@ -236,12 +245,12 @@ with tab2:
         st.dataframe(driver_home_days(df))
 
 
-# ================= MONTHLY TAB =================
+# ================= MONTHLY =================
 with tab3:
 
     monthly = get_monthly_fleet()
 
-    if not monthly.empty:
+    if monthly is not None and not monthly.empty:
         st.dataframe(monthly)
     else:
-        st.info("No data yet")
+        st.info("Upload fleet files first")
