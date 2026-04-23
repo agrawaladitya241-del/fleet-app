@@ -1,34 +1,43 @@
 # Fleet Intelligence Dashboard
 
-A month-aware Streamlit dashboard for tracking daily operations of a flatbed trailer fleet (TSK/TSM · Angul depot).
+Multi-month operational dashboard for a flatbed trailer fleet (TSK/TSM · Angul depot).
 
 ## What it does
 
-Upload a multi-sheet Excel report (one sheet per month) and the app produces:
+Upload the monthly Excel report and the app produces:
 
-- **KPI snapshot** — active trips today, drivers home, waiting/idle vehicles, fleet utilization %
-- **Daily status trend** — stacked bar chart of every vehicle's status across the month
-- **Utilization trend** — productive-day percentage over time
-- **Vehicle performance** — top performers, flagged vehicles needing follow-up, full sortable table
-- **Driver performance** — aggregated by driver
-- **Raw daily log** — filterable, downloadable as CSV
+- **Overview** — Live KPIs (active trips, drivers home, idle/waiting, fleet utilization, accident vehicles) and a daily status trend chart
+- **Vehicles** — Per-vehicle performance with manual vs computed trip counts, top performers, flagged vehicles needing follow-up, and a drill-down showing the exact DH/DP days for any vehicle
+- **Drivers** — Aggregated metrics grouped by driver
+- **Routes** — Route-level analysis (e.g. TSK-PDP, TSM-JSPR). Shows average plant dwell time per route and per-truck deviation so you can spot slow/fast trucks on the same route
+- **Accident Vehicles** — Dedicated view of grounded vehicles with accident date ranges
+- **Audit / Verify** — Search panel (Excel-Find equivalent) and status-by-status cell listing so you can cross-check every count against the source sheet
+- **Raw Data** — Full daily log and parsed Plant In/Out log, both downloadable as CSV
 
 ## Status taxonomy
 
-The app classifies each daily cell into one of these operational states:
+Each daily cell is classified into one of these operational states (precedence top-down):
 
 | Code | Meaning |
 |---|---|
-| DH   | Driver Home |
-| DP   | Driver Problem |
-| LP   | Loading Point |
+| ACCIDENT | Vehicle grounded due to accident |
+| SERVICE | Vehicle grounded for service/repair (clutch, tyre, engine, etc.) |
+| DH | Driver Home |
+| DP | Driver Problem |
+| LP | Loading Point |
 | PARK | Parking |
-| WAIT | Waiting (e.g. "Wait For Load", "WT FOR DO") |
+| WAIT | Waiting (Wait For Load / WT FOR DO etc.) |
 | TNST | In Transit |
-| UL   | Unloading Point |
-| MT   | Empty Truck Movement |
+| UL | Unloading Point |
+| MT | Empty Truck Movement |
 | TRIP | Active laden trip |
-| NO_DATA | No activity logged |
+| NO_DATA | Empty cell |
+
+## Trip counting
+
+A trip is defined as a cell starting with `TSK-`, `TSM-`, or `JSPL-` followed by a destination. This heuristic matches the human-entered Trip column in the Excel file with ~90% accuracy.
+
+When a month sheet has a manual `Trip` column (like March), the app shows both counts side-by-side so you can verify. When it doesn't (like April), only the computed count is shown with a clear warning.
 
 ## Local setup
 
@@ -37,32 +46,33 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Then open the URL Streamlit prints (usually `http://localhost:8501`).
-
 ## Deploy to Streamlit Community Cloud (free, no login)
 
-1. Push this repository to GitHub (public repo).
-2. Go to [share.streamlit.io](https://share.streamlit.io) and sign in with GitHub.
-3. Click **New app**, select this repo, pick `app.py` as the entry point.
-4. Click **Deploy**. You'll get a public URL like `https://your-app.streamlit.app` that anyone can use — no login required.
-5. Every time you push to the main branch, the app redeploys automatically.
+1. Push this repo to GitHub (public).
+2. Go to [share.streamlit.io](https://share.streamlit.io), sign in with GitHub.
+3. Click "New app" → pick this repo → `app.py` as the entry point → Deploy.
+4. You'll get a public URL anyone can use.
 
-## Expected Excel file format
+Pushes to the main branch auto-redeploy within ~1 minute.
 
-- One sheet per month, with sheet names starting with the month (e.g. `February`, `March`, `APRIL`).
-- Each sheet's first row is the header:
-  - Meta columns: `Sl No`, `Vehicle No`, `Model`, `Driver Name`, `Cont No`
-  - Date columns: one per day (either real date cells or text like `01-Feb`, `03-Aprl`)
-  - Optional `PLANT IN/OUT` columns between date columns
-- One row per vehicle; each date cell contains a status description (e.g. `"UL Jamshedpur"`, `"MT CKL (DH)"`, `"Loading Point Wait For Load"`).
+## Expected Excel format
+
+- One sheet per month, name starting with the month (`February`, `March`, `APRIL`, etc.).
+- Header columns: `Sl No`, `Vehicle No`, `Model`, `Driver Name`, `Cont No`, then one column per day of the month.
+- Optional `PLANT IN/OUT` columns interleaved with date columns (contain IN/OUT timestamps or service notes).
+- Optional `Trip` column at the end with the manual trip count per vehicle.
+- Yellow-highlighted cells = recognized trip routes (e.g. `TSK-PDP`), used for route analysis.
+- `ACCIDENT` / `Accidental Work` in cells = grounded vehicle.
+
+Hidden rows and columns in the Excel file are read correctly — they're just hidden visually, not deleted.
 
 ## Project structure
 
 ```
 .
-├── app.py           # Streamlit UI
-├── data_loader.py   # Excel parsing: multi-sheet, messy headers, long-format output
-├── analytics.py     # Status classification + summary tables
+├── app.py           # Streamlit UI (7 tabs)
+├── data_loader.py   # Excel parsing (multi-sheet, messy headers, timestamp extraction)
+├── analytics.py     # Status classification, trip counting, route extraction, accident detection
 ├── requirements.txt
 └── README.md
 ```
