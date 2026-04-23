@@ -1,306 +1,575 @@
-import streamlit as st
+"""
+app.py
+------
+Fleet Intelligence Dashboard for TSK/TSM flatbed trailer fleet.
+
+Reads a multi-sheet Excel workbook (one sheet per month) and renders a
+clean, month-aware dashboard with KPIs, drill-down tables, and a daily
+status trend.
+
+Deployment: Streamlit Community Cloud (free tier). No login required.
+"""
+
+from __future__ import annotations
+
+import io
+from datetime import datetime
+
 import pandas as pd
-from datetime import date
-import openpyxl
-import re
+import plotly.express as px
+import streamlit as st
 
-from driver_helper import (
-    process_driver_file,
-    driver_summary,
-    driver_home_days
+import data_loader
+import analytics
+
+# ------------------------------------------------------------------
+# Page config + global styling
+# ------------------------------------------------------------------
+
+st.set_page_config(
+    page_title="Fleet Intelligence · TSK",
+    page_icon="🚛",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
-from database import save_fleet_data, save_driver_data
+
+# A restrained, utilitarian dark theme. No decorative gradients — this is an
+# ops dashboard, not a marketing page. Typography: IBM Plex Sans (industrial,
+# designed for data) paired with JetBrains Mono for numbers.
+CUSTOM_CSS = """
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
+
+  html, body, [class*="css"] {
+    font-family: 'IBM Plex Sans', -apple-system, sans-serif !important;
+  }
+
+  /* Page background: flat near-black, no gradients */
+  .stApp {
+    background: #0b0d10;
+  }
+
+  /* Main container padding */
+  .block-container {
+    padding-top: 2rem;
+    padding-bottom: 4rem;
+    max-width: 1400px;
+  }
+
+  /* Headings */
+  h1, h2, h3, h4 {
+    font-family: 'IBM Plex Sans', sans-serif !important;
+    letter-spacing: -0.01em;
+    color: #f5f5f5;
+  }
+  h1 {
+    font-weight: 700;
+    font-size: 2rem !important;
+    border-bottom: 1px solid #1f2328;
+    padding-bottom: 0.75rem;
+    margin-bottom: 0.5rem !important;
+  }
+  h2 {
+    font-weight: 600;
+    font-size: 1.25rem !important;
+    margin-top: 2rem !important;
+    color: #e5e7eb;
+  }
+  h3 {
+    font-weight: 500;
+    font-size: 1rem !important;
+    color: #d1d5db;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Subtle page subtitle under h1 */
+  .page-subtitle {
+    color: #8b93a1;
+    font-size: 0.95rem;
+    margin-bottom: 2rem;
+    font-weight: 400;
+  }
+
+  /* KPI cards — flat, bordered, monospaced numbers */
+  .kpi-card {
+    background: #11141a;
+    border: 1px solid #1f2328;
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    height: 100%;
+  }
+  .kpi-label {
+    color: #8b93a1;
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.5rem;
+  }
+  .kpi-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 2.25rem;
+    font-weight: 700;
+    color: #f5f5f5;
+    line-height: 1;
+  }
+  .kpi-unit {
+    color: #8b93a1;
+    font-size: 1rem;
+    font-weight: 400;
+    margin-left: 0.25rem;
+  }
+  .kpi-card.accent-green .kpi-value { color: #22c55e; }
+  .kpi-card.accent-red   .kpi-value { color: #ef4444; }
+  .kpi-card.accent-amber .kpi-value { color: #f59e0b; }
+  .kpi-card.accent-blue  .kpi-value { color: #60a5fa; }
+
+  /* Sidebar styling */
+  section[data-testid="stSidebar"] {
+    background: #0f1216;
+    border-right: 1px solid #1f2328;
+  }
+  section[data-testid="stSidebar"] h1,
+  section[data-testid="stSidebar"] h2,
+  section[data-testid="stSidebar"] h3 {
+    color: #e5e7eb;
+  }
+
+  /* Tabs */
+  .stTabs [data-baseweb="tab-list"] {
+    gap: 0;
+    border-bottom: 1px solid #1f2328;
+  }
+  .stTabs [data-baseweb="tab"] {
+    background: transparent;
+    color: #8b93a1;
+    font-weight: 500;
+    padding: 0.75rem 1.25rem;
+    border: none;
+    border-bottom: 2px solid transparent;
+  }
+  .stTabs [aria-selected="true"] {
+    color: #f5f5f5 !important;
+    border-bottom: 2px solid #f59e0b !important;
+    background: transparent !important;
+  }
+
+  /* Dataframes */
+  .stDataFrame {
+    border: 1px solid #1f2328;
+    border-radius: 6px;
+  }
+
+  /* File uploader — make it less shouty */
+  [data-testid="stFileUploader"] section {
+    background: #11141a;
+    border: 1px dashed #2a3039;
+    border-radius: 6px;
+  }
+
+  /* Status chip */
+  .status-chip {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Hide Streamlit's default chrome we don't need */
+  #MainMenu, footer, header[data-testid="stHeader"] {
+    visibility: hidden;
+  }
+
+  /* Info/warning boxes */
+  .stAlert {
+    background: #11141a;
+    border: 1px solid #1f2328;
+    border-radius: 6px;
+  }
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-# ================= GET LATEST FILE =================
-def get_latest_file(files):
-    dated_files = []
-    for f in files:
-        match = re.search(r'(\d{2})\.(\d{2})', f.name)
-        if match:
-            day, month = match.groups()
-            date_key = int(month) * 100 + int(day)
-            dated_files.append((date_key, f))
-    if not dated_files:
-        return files[-1]
-    return sorted(dated_files, reverse=True)[0][1]
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def kpi_card(label: str, value, unit: str = "", accent: str = "") -> str:
+    """Render an HTML KPI card."""
+    accent_class = f"accent-{accent}" if accent else ""
+    unit_html = f'<span class="kpi-unit">{unit}</span>' if unit else ""
+    return f"""
+    <div class="kpi-card {accent_class}">
+      <div class="kpi-label">{label}</div>
+      <div class="kpi-value">{value}{unit_html}</div>
+    </div>
+    """
 
 
-# ================= ORIGINAL FLEET PROCESS =================
-def process_file(uploaded_file):
-    wb = openpyxl.load_workbook(uploaded_file)
-    ws = wb.active
-
-    vehicle_col = None
-    trips_col = None
-
-    for row in ws.iter_rows(min_row=1, max_row=10):
-        for i, cell in enumerate(row):
-            if cell.value:
-                text = str(cell.value).upper()
-                if "VEHICLE" in text:
-                    vehicle_col = i
-                if "TRIP" in text:
-                    trips_col = i
-
-    data = {}
-
-    for row in ws.iter_rows(min_row=2):
-
-        vehicle_raw = row[vehicle_col].value
-        if not vehicle_raw:
-            continue
-
-        vehicle = str(vehicle_raw).replace(" ", "").upper()
-
-        try:
-            trips = float(row[trips_col].value)
-        except:
-            trips = 0
-
-        idle = 0
-        for i, cell in enumerate(row):
-            if i in [vehicle_col, trips_col]:
-                continue
-
-            val = str(cell.value).upper() if cell.value else ""
-            if "WAIT" in val or "PARK" in val:
-                idle += 1
-
-        if vehicle not in data:
-            data[vehicle] = {"trips": 0, "idle": 0}
-
-        data[vehicle]["trips"] += trips
-        data[vehicle]["idle"] += idle
-
-    return data
+@st.cache_data(show_spinner=False)
+def load_data(file_bytes: bytes, year: int) -> pd.DataFrame:
+    """Cached load. file_bytes makes this cache on file content, not path."""
+    buf = io.BytesIO(file_bytes)
+    df = data_loader.load_all_months(buf, year=year)
+    return analytics.add_status_column(df)
 
 
-# ================= FLEET SUMMARY =================
-def fleet_summary(file):
-    data = process_file(file)
+# ------------------------------------------------------------------
+# Header
+# ------------------------------------------------------------------
 
-    total_vehicles = len(data)
-    total_trips = sum(v["trips"] for v in data.values())
-    total_idle = sum(v["idle"] for v in data.values())
+st.markdown("# Fleet Intelligence")
+st.markdown(
+    '<div class="page-subtitle">'
+    "Daily operations dashboard for TSK/TSM flatbed fleet · Angul depot"
+    "</div>",
+    unsafe_allow_html=True,
+)
 
-    efficiency = round(total_trips / (total_trips + total_idle), 3) if (total_trips + total_idle) else 0
 
-    return data, total_vehicles, int(total_trips), total_idle, efficiency
+# ------------------------------------------------------------------
+# Sidebar: file upload + filters
+# ------------------------------------------------------------------
+
+with st.sidebar:
+    st.markdown("### Data")
+    uploaded = st.file_uploader(
+        "Upload fleet report (.xlsx)",
+        type=["xlsx"],
+        help="Multi-sheet workbook with one sheet per month (e.g. February, March, APRIL).",
+    )
+
+    # Year used for date parsing — only matters for text-date sheets like 'APRIL'
+    year = st.number_input(
+        "Reporting year",
+        min_value=2020,
+        max_value=2100,
+        value=datetime.now().year,
+        help="Used to assign a year to date columns. Doesn't affect data values.",
+    )
 
 
-# ================= STATUS =================
-def extract_fleet_status(file):
+# ------------------------------------------------------------------
+# Main body
+# ------------------------------------------------------------------
 
-    df = pd.read_excel(file)
-    final = {}
+if not uploaded:
+    st.info(
+        "Upload a fleet report Excel file to begin. "
+        "The file should have one sheet per month (e.g., `February`, `March`, `APRIL`) "
+        "with columns for Vehicle No, Driver Name, and one column per day of the month."
+    )
+    st.stop()
 
-    for _, row in df.iterrows():
+# Read file bytes once (for caching)
+file_bytes = uploaded.getvalue()
 
-        vehicle = None
-        for col in df.columns:
-            if "vehicle" in str(col).lower():
-                vehicle = str(row[col]).strip().upper()
-                break
+try:
+    df_all = load_data(file_bytes, year=int(year))
+except Exception as e:
+    st.error(f"Couldn't read that file: {e}")
+    st.stop()
 
-        if not vehicle:
-            continue
+if df_all.empty:
+    st.warning(
+        "No month sheets were found in this workbook. "
+        "Expected sheet names like `February`, `March`, `APRIL`."
+    )
+    st.stop()
 
-        values = [str(x).upper() for x in row if pd.notna(x)]
 
-        dp = sum(1 for x in values if "DP" in x)
-        dh = sum(1 for x in values if "DH" in x)
+# ------------------------------------------------------------------
+# Month selector (in sidebar, after data loads)
+# ------------------------------------------------------------------
 
-        current_status = values[-1]
+available_months = (
+    df_all[["month_name", "date"]]
+    .assign(_month_num=lambda d: d["date"].dt.month)
+    .drop_duplicates(subset=["month_name"])
+    .sort_values("_month_num", ascending=False)["month_name"]
+    .tolist()
+)
 
-        if "DP" in current_status:
-            status = "Delay"
-        elif "DH" in current_status:
-            status = "Driver Home"
+with st.sidebar:
+    st.markdown("### View")
+    month_options = ["All months"] + available_months
+    # Default: latest month (first real month in the sorted list)
+    default_index = 1 if len(month_options) > 1 else 0
+    selected_month = st.selectbox("Month", month_options, index=default_index)
+
+    st.markdown("### Filter")
+    all_drivers = sorted(
+        [d for d in df_all["driver"].unique() if d and str(d).strip()]
+    )
+    driver_filter = st.multiselect("Driver", all_drivers, default=[])
+
+    all_vehicles = sorted(df_all["vehicle"].unique())
+    vehicle_filter = st.multiselect("Vehicle", all_vehicles, default=[])
+
+
+# Apply filters
+df = df_all.copy()
+if selected_month != "All months":
+    df = df[df["month_name"] == selected_month]
+if driver_filter:
+    df = df[df["driver"].isin(driver_filter)]
+if vehicle_filter:
+    df = df[df["vehicle"].isin(vehicle_filter)]
+
+if df.empty:
+    st.warning("No data matches the selected filters.")
+    st.stop()
+
+
+# ------------------------------------------------------------------
+# KPI row
+# ------------------------------------------------------------------
+
+kpis = analytics.compute_kpis(df)
+
+latest = kpis["latest_date"]
+latest_str = latest.strftime("%d %b %Y") if latest is not None else "—"
+
+st.markdown(
+    f"<div style='color:#8b93a1; font-size:0.85rem; margin-bottom:1rem;'>"
+    f"Snapshot: <strong style='color:#d1d5db;'>{selected_month}</strong> · "
+    f"Latest day logged: <strong style='color:#d1d5db;'>{latest_str}</strong>"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+
+k1, k2, k3, k4 = st.columns(4)
+with k1:
+    st.markdown(
+        kpi_card("Active trips today", kpis["active_trips"], accent="green"),
+        unsafe_allow_html=True,
+    )
+with k2:
+    st.markdown(
+        kpi_card("Drivers home", kpis["drivers_home"], accent="red"),
+        unsafe_allow_html=True,
+    )
+with k3:
+    st.markdown(
+        kpi_card("Waiting / idle", kpis["idle_waiting"], accent="amber"),
+        unsafe_allow_html=True,
+    )
+with k4:
+    st.markdown(
+        kpi_card("Fleet utilization", kpis["fleet_util_pct"], unit="%", accent="blue"),
+        unsafe_allow_html=True,
+    )
+
+
+# ------------------------------------------------------------------
+# Tabs
+# ------------------------------------------------------------------
+
+tab_overview, tab_vehicles, tab_drivers, tab_raw = st.tabs(
+    ["Overview", "Vehicles", "Drivers", "Raw data"]
+)
+
+# ---- Overview tab ----
+with tab_overview:
+    st.markdown("## Daily status trend")
+
+    daily = analytics.daily_summary(df)
+    if daily.empty:
+        st.info("Not enough data to chart.")
+    else:
+        # Stacked bar chart of status counts per day
+        status_cols = [c for c in analytics.STATUS_ORDER if c != "NO_DATA"]
+        melted = daily.melt(
+            id_vars=["date"],
+            value_vars=status_cols,
+            var_name="status",
+            value_name="count",
+        )
+        melted["status_label"] = melted["status"].map(analytics.STATUS_LABELS)
+
+        fig = px.bar(
+            melted,
+            x="date",
+            y="count",
+            color="status",
+            color_discrete_map=analytics.STATUS_COLORS,
+            category_orders={"status": status_cols},
+            labels={"date": "", "count": "Vehicles", "status": "Status"},
+        )
+        fig.update_layout(
+            plot_bgcolor="#0b0d10",
+            paper_bgcolor="#0b0d10",
+            font=dict(family="IBM Plex Sans", color="#d1d5db"),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+                bgcolor="rgba(0,0,0,0)",
+            ),
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=420,
+            xaxis=dict(gridcolor="#1f2328", showgrid=False),
+            yaxis=dict(gridcolor="#1f2328"),
+            bargap=0.15,
+        )
+        # Update legend labels
+        for trace in fig.data:
+            trace.name = analytics.STATUS_LABELS.get(trace.name, trace.name)
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("## Utilization trend")
+        fig2 = px.line(
+            daily,
+            x="date",
+            y="utilization_pct",
+            markers=True,
+            labels={"date": "", "utilization_pct": "Utilization %"},
+        )
+        fig2.update_traces(line_color="#60a5fa", marker=dict(size=6))
+        fig2.update_layout(
+            plot_bgcolor="#0b0d10",
+            paper_bgcolor="#0b0d10",
+            font=dict(family="IBM Plex Sans", color="#d1d5db"),
+            margin=dict(l=20, r=20, t=20, b=20),
+            height=280,
+            xaxis=dict(gridcolor="#1f2328", showgrid=False),
+            yaxis=dict(gridcolor="#1f2328", range=[0, 105]),
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+
+# ---- Vehicles tab ----
+with tab_vehicles:
+    st.markdown("## Vehicle performance")
+
+    vs = analytics.vehicle_summary(df)
+    if vs.empty:
+        st.info("No vehicle data for this selection.")
+    else:
+        st.markdown("### Top performers")
+        top = vs.head(10)
+        st.dataframe(
+            top,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "utilization_pct": st.column_config.ProgressColumn(
+                    "Utilization %",
+                    min_value=0,
+                    max_value=100,
+                    format="%.1f%%",
+                ),
+            },
+        )
+
+        st.markdown("### Flagged vehicles")
+        st.markdown(
+            "<div style='color:#8b93a1; font-size:0.85rem; margin-bottom:0.5rem;'>"
+            "Vehicles with high idle / driver issues deserve follow-up."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        # A vehicle is flagged if:
+        #   - utilization < 40%, OR
+        #   - DH days >= 3, OR
+        #   - DP days >= 2
+        flagged = vs[
+            (vs["utilization_pct"] < 40)
+            | (vs["DH"] >= 3)
+            | (vs["DP"] >= 2)
+        ].sort_values("utilization_pct")
+        if flagged.empty:
+            st.success("No vehicles flagged in the current view.")
         else:
-            status = "Active"
+            st.dataframe(
+                flagged,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "utilization_pct": st.column_config.ProgressColumn(
+                        "Utilization %",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%",
+                    ),
+                },
+            )
 
-        final[vehicle] = {"DP": dp, "DH": dh, "status_type": status}
-
-    return pd.DataFrame(final).T.reset_index().rename(columns={"index": "vehicle"})
-
-
-# ================= MONTHLY =================
-def monthly_analysis(file):
-
-    df = pd.read_excel(file)
-
-    vehicle_col = None
-    for col in df.columns:
-        if "vehicle" in str(col).lower():
-            vehicle_col = col
-            break
-
-    results = []
-
-    for _, row in df.iterrows():
-
-        vehicle = str(row[vehicle_col]).strip().upper()
-        if not vehicle:
-            continue
-
-        dp = dh = trips = days = 0
-
-        for val in row:
-            if pd.isna(val):
-                continue
-
-            val_str = str(val).upper()
-            days += 1
-
-            if "DP" in val_str:
-                dp += 1
-            elif "DH" in val_str:
-                dh += 1
-
-            try:
-                trips += float(val)
-            except:
-                pass
-
-        results.append({
-            "vehicle": vehicle,
-            "DP": dp,
-            "DH": dh,
-            "Trips": trips,
-            "Days": days
-        })
-
-    return pd.DataFrame(results)
+        st.markdown("### All vehicles")
+        st.dataframe(
+            vs,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "utilization_pct": st.column_config.ProgressColumn(
+                    "Utilization %",
+                    min_value=0,
+                    max_value=100,
+                    format="%.1f%%",
+                ),
+            },
+        )
 
 
-# ================= MANAGER FUNCTIONS =================
-def get_consistent(df):
-    return df[
-        (df["Trips"] > df["Trips"].mean()) &
-        (df["DP"] < df["DP"].mean()) &
-        (df["DH"] < df["DH"].mean())
-    ]
+# ---- Drivers tab ----
+with tab_drivers:
+    st.markdown("## Driver performance")
+    ds = analytics.driver_summary(df)
+    if ds.empty:
+        st.info("No driver data for this selection.")
+    else:
+        st.dataframe(
+            ds,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "utilization_pct": st.column_config.ProgressColumn(
+                    "Utilization %",
+                    min_value=0,
+                    max_value=100,
+                    format="%.1f%%",
+                ),
+            },
+        )
 
 
-def get_problem(df):
-    return df[
-        (df["DP"] > df["DP"].mean()) |
-        (df["DH"] > df["DH"].mean())
-    ]
+# ---- Raw data tab ----
+with tab_raw:
+    st.markdown("## Daily log")
+    st.markdown(
+        "<div style='color:#8b93a1; font-size:0.85rem; margin-bottom:0.75rem;'>"
+        "One row per vehicle per day. Filter in the sidebar to narrow down."
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
+    display_df = df.copy()
+    display_df["date"] = display_df["date"].dt.strftime("%Y-%m-%d")
+    display_df = display_df[
+        ["date", "vehicle", "driver", "status", "status_raw", "month_name"]
+    ].rename(columns={
+        "status_raw": "original_text",
+        "month_name": "month",
+    })
 
-def get_critical(df):
-    return df[
-        (df["DP"] > df["DP"].mean() * 1.5) |
-        (df["DH"] > df["DH"].mean() * 1.5)
-    ]
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        height=500,
+    )
 
-
-def add_score(df):
-    df = df.copy()
-    df["Score"] = df["Trips"] - (df["DP"] * 5) - (df["DH"] * 3)
-    return df.sort_values(by="Score", ascending=False)
-
-
-def recommendations(df):
-    recs = []
-    if len(df[df["DP"] > df["DP"].mean()]) > 0:
-        recs.append("⚠️ High delay vehicles detected")
-    if len(df[df["DH"] > df["DH"].mean()]) > 0:
-        recs.append("⚠️ Driver availability issues detected")
-    return recs
-
-
-# ================= SMART QUERY =================
-def smart_query(q, df):
-    q = q.lower()
-
-    if "dp" in q:
-        return df.sort_values(by="DP", ascending=False).head(10)
-    if "dh" in q:
-        return df.sort_values(by="DH", ascending=False).head(10)
-    if "trip" in q:
-        return df.sort_values(by="Trips", ascending=False).head(10)
-    if "score" in q:
-        return add_score(df).head(10)
-
-    return "Query not understood"
-
-
-# ================= APP =================
-st.set_page_config(layout="wide")
-st.title("🚛 Fleet Intelligence System")
-
-tab1, tab2 = st.tabs(["Fleet", "Driver"])
-
-
-with tab1:
-
-    files = st.file_uploader("Upload Fleet Files", type=["xlsx"], accept_multiple_files=True)
-
-    if files:
-
-        latest_file = get_latest_file(files)
-
-        data, total_v, trips, idle, eff = fleet_summary(latest_file)
-        status_df = extract_fleet_status(latest_file)
-        monthly_df = monthly_analysis(latest_file)
-
-        save_fleet_data(data, str(date.today()))
-
-        # ORIGINAL METRICS
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Vehicles", total_v)
-        c2.metric("Trips", trips)
-        c3.metric("Idle", idle)
-        c4.metric("Efficiency", eff)
-
-        # STATUS
-        st.subheader("Fleet Status")
-        st.dataframe(status_df)
-
-        # MANAGER DASHBOARD
-        st.divider()
-        st.subheader("Manager Dashboard")
-
-        st.dataframe(get_critical(monthly_df).head(10))
-
-        st.subheader("Consistent Vehicles")
-        st.dataframe(get_consistent(monthly_df).head(10))
-
-        st.subheader("Problem Vehicles")
-        st.dataframe(get_problem(monthly_df).head(10))
-
-        st.subheader("Performance Ranking")
-        st.dataframe(add_score(monthly_df).head(10))
-
-        st.subheader("Recommendations")
-        for r in recommendations(monthly_df):
-            st.warning(r)
-
-        # QUERY
-        st.subheader("Smart Query")
-        q = st.text_input("Ask query")
-
-        if st.button("Run Query"):
-            res = smart_query(q, monthly_df)
-            if isinstance(res, str):
-                st.warning(res)
-            else:
-                st.dataframe(res)
-
-
-with tab2:
-
-    file = st.file_uploader("Upload Driver File")
-
-    if file:
-        df = process_driver_file(file)
-        save_driver_data(df)
-
-        st.subheader("Driver Summary")
-        st.dataframe(driver_summary(df))
-
-        st.subheader("Driver Home Days")
-        st.dataframe(driver_home_days(df))
+    # Download button
+    csv_bytes = display_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download CSV",
+        data=csv_bytes,
+        file_name=f"fleet_log_{selected_month.lower().replace(' ', '_')}.csv",
+        mime="text/csv",
+    )
