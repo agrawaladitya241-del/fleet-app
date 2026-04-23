@@ -1,64 +1,87 @@
 """
 analytics.py
 ------------
-Classifies each daily status cell into an operational state and produces
-summary tables for the dashboard.
+Status classification, trip counting, route extraction, accident detection,
+and all summary-builder functions used by the dashboard.
 
-Status taxonomy (confirmed with the user):
-  DH      - Driver Home (driver on leave, vehicle parked)
-  DP      - Driver Problem (driver-side issue, sick/absent/etc.)
-  TNST    - Transit (vehicle moving between points)
-  UL      - Unloading Point (at destination, unloading)
-  LP      - Loading Point (at source, loading; includes "Loading Point Wait For X")
-  MT      - Empty Truck Movement (deadhead, running empty)
-  WAIT    - Waiting / parked at a waiting spot awaiting dispatch
-  PARK    - Parked at a designated parking spot
-  TRIP    - Active laden trip between two locations
-  NO_DATA - Empty cell / no activity logged
+Status taxonomy:
+  DH       - Driver Home
+  DP       - Driver Problem
+  LP       - Loading Point
+  PARK     - Parking
+  WAIT     - Waiting
+  TNST     - In Transit
+  UL       - Unloading
+  MT       - Empty Truck Movement
+  TRIP     - Active laden trip (origin-destination route, esp. TSK/TSM/JSPL prefix)
+  ACCIDENT - Vehicle grounded due to accident
+  SERVICE  - Vehicle grounded for service/repair (tyre, clutch, engine, etc.)
+  NO_DATA  - Empty cell
+
+Trip counting:
+  A "trip" is defined as a cell whose text starts with TSK-, TSM-, or JSPL-
+  followed by a destination code. This heuristic matches the human-entered
+  Trip column in March with ~90% accuracy.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pandas as pd
+
+
+# ------------------------------------------------------------------
+# Regex patterns
+# ------------------------------------------------------------------
+
+_RE_DH = re.compile(r"\(DH\)|\bDH\b", re.IGNORECASE)
+_RE_DP = re.compile(r"\(DP\)|\bDP\b", re.IGNORECASE)
+_RE_LOADING = re.compile(r"\bloading\s*point\b|\bl[\-\s]*point\b", re.IGNORECASE)
+_RE_PARKING = re.compile(r"\bparking\b", re.IGNORECASE)
+_RE_WAIT = re.compile(r"\bwait\b|\bwt\s+for\b|\bw\.t\.\b", re.IGNORECASE)
+_RE_TNST = re.compile(r"^\s*(tnst|t)\s+[a-zA-Z]", re.IGNORECASE)
+_RE_UL = re.compile(r"\bul\b|\bunload", re.IGNORECASE)
+_RE_MT = re.compile(r"\bmt\b", re.IGNORECASE)
+
+# Accident: explicit ACCIDENT or "Accidental Work"
+_RE_ACCIDENT = re.compile(r"\baccident", re.IGNORECASE)
+
+# Service/repair: mechanical/maintenance notes
+_RE_SERVICE = re.compile(
+    r"\b(clutch|tyre|tire|engine|silencer|brake|broken|damage|repair|breakdown|"
+    r"break\s*down|starting\s*issue|trolly\s*pati|gadi\s*broken|leak|adjust|"
+    r"overhaul)\b",
+    re.IGNORECASE,
+)
+
+# A "trip" (laden delivery) — cell starts with TSK-, TSM-, or JSPL- prefix
+_RE_TRIP_PREFIX = re.compile(
+    r"^\s*(TSK|TSM|JSPL)[\s\-]+([A-Za-z][A-Za-z\s]*)",
+    re.IGNORECASE,
+)
+
+# Generic route pattern: any ORIGIN-DESTINATION with both being place codes
+# (used as fallback for route extraction in April where fewer TSK/TSM/JSPL cells)
+_RE_ROUTE = re.compile(
+    r"^\s*([A-Z][A-Z\s]{1,10})[\-](\s*[A-Z][A-Za-z\s]+)",
+    re.IGNORECASE,
+)
 
 
 # ------------------------------------------------------------------
 # Status classification
 # ------------------------------------------------------------------
 
-# Precompiled regex patterns for robustness.
-# IMPORTANT: these patterns match *tags* (DH/DP as standalone words or in parens),
-# not substrings inside place names. This is the key bug fix from the old code.
+STATUS_ORDER = [
+    "ACCIDENT", "SERVICE", "DH", "DP", "LP", "PARK", "WAIT",
+    "TNST", "UL", "MT", "TRIP", "NO_DATA",
+]
 
-_RE_DH = re.compile(r"\(DH\)|\bDH\b", re.IGNORECASE)
-_RE_DP = re.compile(r"\(DP\)|\bDP\b", re.IGNORECASE)
-
-# User clarified: "Loading Point" and "Parking" are LOCATIONS.
-# "Wait For Load / Wait For DO / WT FOR X" = WAIT state.
-# Precedence: location wins over waiting (per user decision).
-_RE_LOADING = re.compile(r"\bloading\s*point\b|\bl\s*point\b", re.IGNORECASE)
-_RE_PARKING = re.compile(r"\bparking\b", re.IGNORECASE)
-_RE_WAIT = re.compile(r"\bwait\b|\bwt\s+for\b|\bw\.t\.\b", re.IGNORECASE)
-
-# Transit — cell starts with "TNST " or "T " followed by a location.
-# We require the space to avoid matching things like "Tata" or "TSK".
-_RE_TNST = re.compile(r"^\s*(tnst|t)\s+[a-z]", re.IGNORECASE)
-
-# Unloading — "UL" as a word, "UL JSPR", "Rourkela UL Rourkela", etc.
-_RE_UL = re.compile(r"\bul\b|\bunload", re.IGNORECASE)
-
-# Empty-truck movement — " MT" at end, or "MT " at start/middle as a tag.
-# Again we require word boundaries to avoid "Dhamra" being flagged.
-_RE_MT = re.compile(r"\bmt\b", re.IGNORECASE)
-
-
-STATUS_ORDER = ["DH", "DP", "LP", "PARK", "WAIT", "TNST", "UL", "MT", "TRIP", "NO_DATA"]
-
-# Human-friendly labels for the UI
 STATUS_LABELS = {
+    "ACCIDENT": "Accident",
+    "SERVICE": "In Service",
     "DH": "Driver Home",
     "DP": "Driver Problem",
     "LP": "Loading Point",
@@ -71,49 +94,34 @@ STATUS_LABELS = {
     "NO_DATA": "No Data",
 }
 
-# Color hints for charts / chips. Ops meaning:
-#   green  = productive (TRIP, UL)
-#   yellow = in-progress / neutral (TNST, LP, MT)
-#   orange = unproductive but excusable (WAIT, PARK)
-#   red    = unproductive and costly (DH, DP)
-#   gray   = no data
 STATUS_COLORS = {
-    "TRIP": "#22c55e",
-    "UL": "#16a34a",
-    "TNST": "#eab308",
-    "LP": "#f59e0b",
-    "MT": "#fbbf24",
-    "WAIT": "#f97316",
-    "PARK": "#fb923c",
-    "DH": "#ef4444",
-    "DP": "#dc2626",
-    "NO_DATA": "#4b5563",
+    "TRIP": "#22c55e",       # green — productive
+    "UL": "#16a34a",         # darker green
+    "TNST": "#eab308",       # yellow — in progress
+    "LP": "#f59e0b",         # amber
+    "MT": "#fbbf24",         # light amber
+    "WAIT": "#f97316",       # orange
+    "PARK": "#fb923c",       # light orange
+    "DH": "#ef4444",         # red — unproductive
+    "DP": "#dc2626",         # dark red
+    "SERVICE": "#a855f7",    # purple — repair
+    "ACCIDENT": "#7c3aed",   # dark purple
+    "NO_DATA": "#4b5563",    # gray
 }
 
 
 def classify_status(cell: str) -> str:
-    """
-    Classify a single status cell into one of the codes in STATUS_ORDER.
-
-    Precedence (first match wins):
-      1. NO_DATA if empty
-      2. DH if cell has '(DH)' or ' DH' tag
-      3. DP if cell has '(DP)' or ' DP' tag
-      4. LP if cell contains 'Loading Point' or 'L Point'  (location wins over WAIT)
-      5. PARK if cell contains 'Parking'                   (location wins over WAIT)
-      6. WAIT if cell contains 'Wait' or 'WT FOR'
-      7. TNST if cell starts with 'TNST ' or 'T '
-      8. UL   if cell contains ' UL ' / starts with 'UL'
-      9. MT   if cell contains ' MT ' / ends with ' MT'
-     10. TRIP otherwise
-    """
+    """Classify one status cell. Precedence: ACCIDENT > SERVICE > DH > DP > LP > PARK > WAIT > TNST > UL > MT > TRIP."""
     if cell is None:
         return "NO_DATA"
-
     text = str(cell).strip()
     if not text:
         return "NO_DATA"
 
+    if _RE_ACCIDENT.search(text):
+        return "ACCIDENT"
+    if _RE_SERVICE.search(text):
+        return "SERVICE"
     if _RE_DH.search(text):
         return "DH"
     if _RE_DP.search(text):
@@ -130,40 +138,209 @@ def classify_status(cell: str) -> str:
         return "UL"
     if _RE_MT.search(text):
         return "MT"
-
-    # Default: treat as an active laden trip (e.g. "Baharagora Jamshedpur")
     return "TRIP"
 
 
 def add_status_column(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a copy of df with a new 'status' column classifying status_raw."""
+    """Add 'status' column (classification) and 'is_trip' column (bool).
+
+    A cell counts as a trip only if:
+      - It starts with TSK-, TSM-, or JSPL- followed by a destination
+      - AND the destination is not a waiting-state keyword (WT, WAIT, etc.)
+      - AND the cell isn't classified as WAIT/PARK/LP/ACCIDENT/SERVICE/DH/DP
+    """
     out = df.copy()
     out["status"] = out["status_raw"].apply(classify_status)
+
+    def _is_trip(text, status):
+        if status in {"WAIT", "PARK", "LP", "ACCIDENT", "SERVICE", "DH", "DP", "NO_DATA"}:
+            return False
+        if not text:
+            return False
+        m = _RE_TRIP_PREFIX.match(str(text).strip())
+        if not m:
+            return False
+        # Reject if destination starts with WT / WAIT / PARK / etc.
+        dest = m.group(2).strip().upper()
+        bad_dest_prefixes = ("WT", "WAIT", "PARK", "LOADING", "L POINT", "DH", "DP")
+        if any(dest.startswith(p) for p in bad_dest_prefixes):
+            return False
+        return True
+
+    out["is_trip"] = out.apply(
+        lambda r: _is_trip(r["status_raw"], r["status"]),
+        axis=1,
+    )
     return out
 
 
 # ------------------------------------------------------------------
-# Summary builders
+# Route extraction
 # ------------------------------------------------------------------
 
-# What we count as "productive" (contributing to utilization).
-PRODUCTIVE_STATES = {"TRIP", "UL", "TNST", "LP", "MT"}
+# Normalize destination/origin aliases
+_PLACE_ALIASES = {
+    "JSPR": "JSPR", "JAMSHEDPUR": "JSPR", "JSR": "JSPR",
+    "PDP": "PDP", "PARADEEP": "PDP", "PARADIP": "PDP",
+    "RKL": "RKL", "ROURKELA": "RKL",
+    "BLSR": "BLSR", "BALESWAR": "BLSR", "BALASORE": "BLSR",
+    "BBSR": "BBSR", "BHUBANESWAR": "BBSR", "BHUBHANESWAR": "BBSR",
+    "DKL": "DKL", "DHENKANAL": "DKL", "DHENAKANL": "DKL",
+    "JAJPUR": "JAJPUR",
+    "CUTTACK": "CUTTACK", "CTC": "CUTTACK",
+    "SUNDARGARH": "SUNDARGARH",
+    "ANGUL": "ANGUL", "ANG": "ANGUL",
+    "BEGUNIA": "BEGUNIA",
+    "RAIGARH": "RAIGARH",
+    "RAIPUR": "RAIPUR",
+    "DHAMRA": "DHAMRA", "DHAMARA": "DHAMRA",
+    "CUTTACK": "CUTTACK",
+    "KAMAKHYA": "KAMAKHYA",
+    "MERAMANDALI": "MERAMANDALI", "MERAMDALI": "MERAMANDALI",
+    "KENDRAPARA": "KENDRAPARA", "KENDRAPADA": "KENDRAPARA", "KENDRAPAD": "KENDRAPARA",
+    "TANGI": "TANGI",
+    "KEONJHAR": "KEONJHAR",
+    "JASHIPUR": "JASHIPUR",
+    "GHATAGAON": "GHATAGAON", "GHATGOAN": "GHATAGAON",
+    "CHOUDWAR": "CHOUDWAR",
+}
 
-# Non-data states that should not count in the denominator.
-EXCLUDE_FROM_DENOMINATOR = {"NO_DATA"}
+
+def _normalize_place(s: str) -> str:
+    up = re.sub(r"[^A-Z]", "", str(s).upper())
+    return _PLACE_ALIASES.get(up, up)
 
 
-def vehicle_summary(df: pd.DataFrame) -> pd.DataFrame:
+def extract_route(cell: str) -> Optional[str]:
     """
-    One row per vehicle. Columns: vehicle, driver, plus a count column for each
-    status code, total active days, and a utilization percentage.
+    Return a normalized route string like 'TSK-PDP' for a cell, or None.
+
+    Matches cells starting with TSK-, TSM-, or JSPL- followed by a real destination.
+    Returns the route as 'ORIGIN-DESTINATION' using normalized place codes.
+    Waiting-state destinations (WT, WAIT, PARK, etc.) are rejected.
+    """
+    if not cell:
+        return None
+    text = str(cell).strip()
+    m = _RE_TRIP_PREFIX.match(text)
+    if not m:
+        return None
+    origin = m.group(1).upper()
+    destination_raw = m.group(2).strip()
+    # Reject waiting/service destinations
+    up = destination_raw.upper()
+    bad_prefixes = ("WT", "WAIT", "PARK", "LOADING", "L POINT", "DH", "DP")
+    if any(up.startswith(p) for p in bad_prefixes):
+        return None
+    destination = _normalize_place(destination_raw)
+    if not destination:
+        return None
+    return f"{origin}-{destination}"
+
+
+def add_route_column(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["route"] = out["status_raw"].apply(extract_route)
+    return out
+
+
+# ------------------------------------------------------------------
+# Accident vehicles
+# ------------------------------------------------------------------
+
+def identify_accident_vehicles(
+    df: pd.DataFrame,
+    plant_df: Optional[pd.DataFrame] = None,
+    min_days: int = 3,
+) -> pd.DataFrame:
+    """
+    Return a DataFrame of vehicles flagged as accident-grounded.
+
+    Checks both:
+      - Daily status cells classified as ACCIDENT
+      - Plant In/Out notes containing 'accident' (sometimes the data-entry
+        person logs accidents in the wrong column)
+
+    A vehicle is flagged if its combined accident-count >= min_days for a month.
+
+    Columns: vehicle, driver, month_name, accident_days, first_date, last_date
+    """
+    df = df if "status" in df.columns else add_status_column(df)
+
+    # Accident cells from daily data
+    acc_daily = df[df["status"] == "ACCIDENT"][
+        ["vehicle", "driver", "date", "month_name"]
+    ].copy()
+
+    # Accident mentions in plant notes
+    if plant_df is not None and not plant_df.empty and "note" in plant_df.columns:
+        acc_plant = plant_df[
+            plant_df["note"].astype(str).str.contains("accident", case=False, na=False)
+        ][["vehicle", "date", "month_name"]].copy()
+        acc_plant["driver"] = ""
+    else:
+        acc_plant = pd.DataFrame(columns=["vehicle", "date", "month_name", "driver"])
+
+    combined = pd.concat([acc_daily, acc_plant], ignore_index=True)
+    if combined.empty:
+        return pd.DataFrame(
+            columns=["vehicle", "driver", "month_name", "accident_days", "first_date", "last_date"]
+        )
+
+    # Deduplicate on (vehicle, date, month_name)
+    combined = combined.drop_duplicates(subset=["vehicle", "date", "month_name"])
+
+    grouped = (
+        combined.groupby(["vehicle", "month_name"])
+        .agg(
+            driver=("driver", lambda s: next((x for x in s if x), "")),
+            accident_days=("date", "count"),
+            first_date=("date", "min"),
+            last_date=("date", "max"),
+        )
+        .reset_index()
+    )
+    grouped = grouped[grouped["accident_days"] >= min_days]
+    return grouped.sort_values(
+        ["month_name", "accident_days"], ascending=[True, False]
+    ).reset_index(drop=True)
+
+
+# ------------------------------------------------------------------
+# Productive-state definition for utilization
+# ------------------------------------------------------------------
+
+PRODUCTIVE_STATES = {"TRIP", "UL", "TNST", "LP", "MT"}
+# States that EXCLUDE a vehicle-day from utilization denominator entirely:
+EXCLUDED_FROM_DENOM = {"NO_DATA", "ACCIDENT"}
+
+
+def _utilization_pct(s: pd.Series, row_sum_cols: List[str]) -> float:
+    """Compute utilization given a row with count columns."""
+    total = sum(int(s.get(c, 0)) for c in row_sum_cols if c not in EXCLUDED_FROM_DENOM)
+    prod = sum(int(s.get(c, 0)) for c in PRODUCTIVE_STATES)
+    if total <= 0:
+        return 0.0
+    return round(prod / total * 100, 1)
+
+
+# ------------------------------------------------------------------
+# Vehicle summary
+# ------------------------------------------------------------------
+
+def vehicle_summary(df: pd.DataFrame, exclude_accident_vehicles: bool = True) -> pd.DataFrame:
+    """
+    One row per vehicle with counts for every status + utilization %.
+
+    If exclude_accident_vehicles is True, vehicles whose entire month is accident
+    are excluded from the utilization calculation (they still appear, but marked).
     """
     if df.empty:
         return pd.DataFrame()
 
-    df = add_status_column(df) if "status" not in df.columns else df
+    df = df if "status" in df.columns else add_status_column(df)
+    df = df if "is_trip" in df.columns else add_status_column(df)
 
-    # Count each status per vehicle
     pivot = (
         df.pivot_table(
             index="vehicle",
@@ -174,13 +351,24 @@ def vehicle_summary(df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
-
-    # Ensure all expected columns exist even if a status never appears
     for s in STATUS_ORDER:
         if s not in pivot.columns:
             pivot[s] = 0
 
-    # Attach driver name (most recent non-empty driver for that vehicle)
+    # Trip count via heuristic
+    trips_per_v = df.groupby("vehicle")["is_trip"].sum().astype(int).to_dict()
+    pivot["trips_computed"] = pivot["vehicle"].map(trips_per_v).fillna(0).astype(int)
+
+    # Manual trip count from Excel (takes the max non-null across days; should be
+    # the same value repeated for every day of a given month for a vehicle)
+    manual_map = (
+        df[df["manual_trip_count"].notna()]
+        .groupby("vehicle")["manual_trip_count"]
+        .max()
+    )
+    pivot["trips_manual"] = pivot["vehicle"].map(manual_map)
+
+    # Driver
     driver_map = (
         df[df["driver"].astype(str).str.strip() != ""]
         .sort_values("date")
@@ -189,77 +377,40 @@ def vehicle_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
     pivot["driver"] = pivot["vehicle"].map(driver_map).fillna("")
 
-    # Active days = days with any status other than NO_DATA
-    pivot["active_days"] = pivot[
-        [c for c in STATUS_ORDER if c != "NO_DATA"]
-    ].sum(axis=1)
+    # Accident flag
+    pivot["is_accident_vehicle"] = pivot["ACCIDENT"] >= 3
 
-    # Productive days = days in PRODUCTIVE_STATES
+    # Utilization
+    count_cols = [c for c in STATUS_ORDER if c not in EXCLUDED_FROM_DENOM]
+    pivot["active_days"] = pivot[count_cols].sum(axis=1)
     pivot["productive_days"] = pivot[list(PRODUCTIVE_STATES)].sum(axis=1)
-
-    # Utilization = productive / active, as percentage (0 if active_days == 0)
     pivot["utilization_pct"] = (
         (pivot["productive_days"] / pivot["active_days"].replace(0, pd.NA) * 100)
         .fillna(0)
         .round(1)
     )
+    # Blank out utilization for accident vehicles if requested
+    if exclude_accident_vehicles:
+        pivot.loc[pivot["is_accident_vehicle"], "utilization_pct"] = None
 
-    # Friendly column order
     ordered = (
-        ["vehicle", "driver"]
+        ["vehicle", "driver", "is_accident_vehicle"]
         + STATUS_ORDER
-        + ["active_days", "productive_days", "utilization_pct"]
+        + ["trips_computed", "trips_manual", "active_days", "productive_days", "utilization_pct"]
     )
     pivot = pivot[ordered]
-    return pivot.sort_values(by="utilization_pct", ascending=False).reset_index(drop=True)
-
-
-def daily_summary(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    One row per date. Columns: date, count of each status.
-    Useful for trend charts.
-    """
-    if df.empty:
-        return pd.DataFrame()
-
-    df = add_status_column(df) if "status" not in df.columns else df
-
-    pivot = (
-        df.pivot_table(
-            index="date",
-            columns="status",
-            values="vehicle",
-            aggfunc="count",
-            fill_value=0,
-        )
-        .reset_index()
-    )
-
-    for s in STATUS_ORDER:
-        if s not in pivot.columns:
-            pivot[s] = 0
-
-    pivot["total_logged"] = pivot[[c for c in STATUS_ORDER if c != "NO_DATA"]].sum(axis=1)
-    pivot["productive"] = pivot[list(PRODUCTIVE_STATES)].sum(axis=1)
-    pivot["utilization_pct"] = (
-        (pivot["productive"] / pivot["total_logged"].replace(0, pd.NA) * 100)
-        .fillna(0)
-        .round(1)
-    )
-
-    ordered = ["date"] + STATUS_ORDER + ["total_logged", "productive", "utilization_pct"]
-    return pivot[ordered].sort_values("date").reset_index(drop=True)
+    return pivot.sort_values(
+        by=["is_accident_vehicle", "utilization_pct"],
+        ascending=[True, False],
+        na_position="last",
+    ).reset_index(drop=True)
 
 
 def driver_summary(df: pd.DataFrame) -> pd.DataFrame:
-    """One row per driver with aggregated status counts."""
     if df.empty:
         return pd.DataFrame()
-
-    df = add_status_column(df) if "status" not in df.columns else df
-    # Drop rows with empty drivers
+    df = df if "status" in df.columns else add_status_column(df)
     df = df[df["driver"].astype(str).str.strip() != ""]
-
     if df.empty:
         return pd.DataFrame()
 
@@ -273,50 +424,68 @@ def driver_summary(df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
-
     for s in STATUS_ORDER:
         if s not in pivot.columns:
             pivot[s] = 0
 
-    pivot["active_days"] = pivot[[c for c in STATUS_ORDER if c != "NO_DATA"]].sum(axis=1)
+    # Trips via heuristic
+    trips_per_d = df.groupby("driver")["is_trip"].sum().astype(int).to_dict()
+    pivot["trips_computed"] = pivot["driver"].map(trips_per_d).fillna(0).astype(int)
+
+    count_cols = [c for c in STATUS_ORDER if c not in EXCLUDED_FROM_DENOM]
+    pivot["active_days"] = pivot[count_cols].sum(axis=1)
     pivot["productive_days"] = pivot[list(PRODUCTIVE_STATES)].sum(axis=1)
     pivot["utilization_pct"] = (
         (pivot["productive_days"] / pivot["active_days"].replace(0, pd.NA) * 100)
         .fillna(0)
         .round(1)
     )
-
-    ordered = ["driver"] + STATUS_ORDER + ["active_days", "productive_days", "utilization_pct"]
+    ordered = ["driver"] + STATUS_ORDER + ["trips_computed", "active_days", "productive_days", "utilization_pct"]
     return pivot[ordered].sort_values("utilization_pct", ascending=False).reset_index(drop=True)
 
 
+def daily_summary(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    df = df if "status" in df.columns else add_status_column(df)
+    pivot = (
+        df.pivot_table(
+            index="date",
+            columns="status",
+            values="vehicle",
+            aggfunc="count",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+    for s in STATUS_ORDER:
+        if s not in pivot.columns:
+            pivot[s] = 0
+    count_cols = [c for c in STATUS_ORDER if c not in EXCLUDED_FROM_DENOM]
+    pivot["total_logged"] = pivot[count_cols].sum(axis=1)
+    pivot["productive"] = pivot[list(PRODUCTIVE_STATES)].sum(axis=1)
+    pivot["utilization_pct"] = (
+        (pivot["productive"] / pivot["total_logged"].replace(0, pd.NA) * 100)
+        .fillna(0)
+        .round(1)
+    )
+    ordered = ["date"] + STATUS_ORDER + ["total_logged", "productive", "utilization_pct"]
+    return pivot[ordered].sort_values("date").reset_index(drop=True)
+
+
 # ------------------------------------------------------------------
-# KPIs for the top-of-dashboard cards
+# KPIs
 # ------------------------------------------------------------------
 
-def compute_kpis(df: pd.DataFrame) -> Dict[str, float]:
-    """
-    Compute top-line KPIs for the current selection.
-
-    Returns:
-      total_vehicles:   unique vehicles in data
-      active_trips:     count of TRIP or UL cells on the latest logged date
-      drivers_home:     count of DH cells on the latest logged date
-      idle_waiting:     count of WAIT + PARK cells on the latest logged date
-      fleet_util_pct:   overall productive / active across the selection
-    """
+def compute_kpis(df: pd.DataFrame) -> Dict:
     if df.empty:
         return {
-            "total_vehicles": 0,
-            "active_trips": 0,
-            "drivers_home": 0,
-            "idle_waiting": 0,
-            "fleet_util_pct": 0.0,
-            "latest_date": None,
+            "total_vehicles": 0, "active_trips": 0, "drivers_home": 0,
+            "idle_waiting": 0, "fleet_util_pct": 0.0,
+            "accident_vehicles": 0, "latest_date": None,
+            "total_trips_month": 0,
         }
-
-    df = add_status_column(df) if "status" not in df.columns else df
-
+    df = df if "status" in df.columns else add_status_column(df)
     latest_date = df["date"].max()
     latest = df[df["date"] == latest_date]
 
@@ -325,11 +494,21 @@ def compute_kpis(df: pd.DataFrame) -> Dict[str, float]:
     drivers_home = int((latest["status"] == "DH").sum())
     idle_waiting = int(latest["status"].isin(["WAIT", "PARK"]).sum())
 
-    active_mask = df["status"] != "NO_DATA"
-    productive_mask = df["status"].isin(PRODUCTIVE_STATES)
-    active_count = int(active_mask.sum())
-    productive_count = int(productive_mask.sum())
-    fleet_util = round(productive_count / active_count * 100, 1) if active_count else 0.0
+    # Utilization excluding accident-grounded vehicles
+    vs = vehicle_summary(df, exclude_accident_vehicles=True)
+    accident_count = int(vs["is_accident_vehicle"].sum()) if not vs.empty else 0
+    non_acc = vs[~vs["is_accident_vehicle"]] if not vs.empty else vs
+    if not non_acc.empty and non_acc["active_days"].sum() > 0:
+        fleet_util = round(
+            non_acc["productive_days"].sum() / non_acc["active_days"].sum() * 100, 1
+        )
+    else:
+        fleet_util = 0.0
+
+    # Total trips: prefer manual count if available for this selection
+    manual_total = df[df["manual_trip_count"].notna()].groupby("vehicle")["manual_trip_count"].max().sum()
+    computed_total = int(df["is_trip"].sum()) if "is_trip" in df.columns else 0
+    total_trips_month = int(manual_total) if manual_total > 0 else computed_total
 
     return {
         "total_vehicles": total_vehicles,
@@ -337,5 +516,174 @@ def compute_kpis(df: pd.DataFrame) -> Dict[str, float]:
         "drivers_home": drivers_home,
         "idle_waiting": idle_waiting,
         "fleet_util_pct": fleet_util,
+        "accident_vehicles": accident_count,
         "latest_date": latest_date,
+        "total_trips_month": total_trips_month,
     }
+
+
+# ------------------------------------------------------------------
+# Route analytics
+# ------------------------------------------------------------------
+
+def route_summary(df: pd.DataFrame, plant_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    For each route (e.g. 'TSK-PDP'), compute:
+      - trip_count: how many times this route appears
+      - unique_vehicles: how many distinct vehicles ran it
+      - avg_dwell_hours: average plant-dwell time for trips on this route
+
+    We link dwell time to route by matching the date: a plant In/Out entry
+    attributed to date D is associated with the route cell on date D.
+    """
+    df = df if "route" in df.columns else add_route_column(df)
+    routed = df[df["route"].notna()].copy()
+    if routed.empty:
+        return pd.DataFrame()
+
+    # Merge in dwell hours from plant_df on (vehicle, date)
+    if not plant_df.empty:
+        p = plant_df.groupby(["vehicle", "date"])["dwell_hours"].mean().reset_index()
+        routed = routed.merge(p, on=["vehicle", "date"], how="left")
+    else:
+        routed["dwell_hours"] = None
+
+    agg = (
+        routed.groupby("route")
+        .agg(
+            trip_count=("vehicle", "count"),
+            unique_vehicles=("vehicle", "nunique"),
+            avg_dwell_hours=("dwell_hours", "mean"),
+            min_dwell_hours=("dwell_hours", "min"),
+            max_dwell_hours=("dwell_hours", "max"),
+        )
+        .reset_index()
+    )
+    agg["avg_dwell_hours"] = agg["avg_dwell_hours"].round(2)
+    agg["min_dwell_hours"] = agg["min_dwell_hours"].round(2)
+    agg["max_dwell_hours"] = agg["max_dwell_hours"].round(2)
+    return agg.sort_values("trip_count", ascending=False).reset_index(drop=True)
+
+
+def route_vehicle_deviation(df: pd.DataFrame, plant_df: pd.DataFrame, route: str) -> pd.DataFrame:
+    """
+    For a specific route, return per-trip data with deviation from route's avg dwell.
+    Columns: vehicle, date, dwell_hours, deviation_hours (positive = slower)
+    """
+    df = df if "route" in df.columns else add_route_column(df)
+    routed = df[df["route"] == route].copy()
+    if routed.empty or plant_df.empty:
+        return pd.DataFrame()
+
+    p = plant_df.groupby(["vehicle", "date"])["dwell_hours"].mean().reset_index()
+    routed = routed.merge(p, on=["vehicle", "date"], how="left")
+    valid = routed[routed["dwell_hours"].notna()].copy()
+    if valid.empty:
+        return pd.DataFrame()
+
+    avg = valid["dwell_hours"].mean()
+    valid["avg_dwell"] = round(avg, 2)
+    valid["deviation_hours"] = (valid["dwell_hours"] - avg).round(2)
+    return valid[["vehicle", "date", "dwell_hours", "avg_dwell", "deviation_hours", "status_raw"]].sort_values(
+        "deviation_hours", ascending=False
+    ).reset_index(drop=True)
+
+
+# ------------------------------------------------------------------
+# DH/DP audit — exact days per vehicle
+# ------------------------------------------------------------------
+
+def dh_dp_detail(df: pd.DataFrame, vehicle: str) -> pd.DataFrame:
+    """Return the exact cells classified as DH or DP for one vehicle."""
+    df = df if "status" in df.columns else add_status_column(df)
+    sub = df[(df["vehicle"] == vehicle) & (df["status"].isin(["DH", "DP"]))].copy()
+    return sub[["date", "status", "status_raw", "month_name"]].sort_values("date").reset_index(drop=True)
+
+
+def status_detail(df: pd.DataFrame, vehicle: str, status: str) -> pd.DataFrame:
+    """Return exact cells for one vehicle matching a status code."""
+    df = df if "status" in df.columns else add_status_column(df)
+    sub = df[(df["vehicle"] == vehicle) & (df["status"] == status)].copy()
+    return sub[["date", "status_raw", "month_name"]].sort_values("date").reset_index(drop=True)
+
+
+# ------------------------------------------------------------------
+# Search (Excel-Find equivalent)
+# ------------------------------------------------------------------
+
+def search_cells(df: pd.DataFrame, query: str, case_sensitive: bool = False) -> pd.DataFrame:
+    """Return every daily cell whose status_raw matches the query."""
+    if not query or not query.strip() or df.empty:
+        return pd.DataFrame()
+    q = query.strip()
+    pattern = re.escape(q)
+    if case_sensitive:
+        mask = df["status_raw"].astype(str).str.contains(pattern, regex=True, na=False)
+    else:
+        mask = df["status_raw"].astype(str).str.contains(pattern, regex=True, case=False, na=False)
+    sub = df[mask].copy()
+    if sub.empty:
+        return pd.DataFrame()
+    return sub[["date", "vehicle", "driver", "status_raw", "month_name"]].sort_values(
+        ["date", "vehicle"]
+    ).reset_index(drop=True)
+
+
+# ------------------------------------------------------------------
+# Data quality warnings
+# ------------------------------------------------------------------
+
+def data_quality_warnings(df: pd.DataFrame, plant_df: pd.DataFrame) -> List[str]:
+    warnings = []
+    if df.empty:
+        return ["No data loaded."]
+
+    # 1. Vehicles without any driver name in ANY row across all months
+    driver_by_vehicle = df.groupby("vehicle")["driver"].apply(
+        lambda s: any(str(x).strip() for x in s)
+    )
+    no_driver_vehicles = driver_by_vehicle[~driver_by_vehicle].index.tolist()
+    if no_driver_vehicles:
+        warnings.append(
+            f"⚠ {len(no_driver_vehicles)} vehicle(s) have no driver name recorded in any month: "
+            f"{', '.join(no_driver_vehicles[:5])}{'…' if len(no_driver_vehicles) > 5 else ''}"
+        )
+
+    # 2. Plant in/out entries that couldn't be parsed
+    if not plant_df.empty:
+        unparseable = plant_df[
+            plant_df["in_time"].isna() & plant_df["out_time"].isna() & plant_df["note"].notna()
+        ]
+        if len(unparseable) > 20:
+            warnings.append(
+                f"ℹ {len(unparseable)} plant in/out cells contain notes instead of timestamps "
+                f"(e.g., service notes like 'Clutch Adjust'). These are shown in the Trip log."
+            )
+
+    # 3. Dwell time outliers (> 5 days)
+    if not plant_df.empty and plant_df["dwell_hours"].notna().any():
+        outliers = plant_df[plant_df["dwell_hours"] > 120]
+        if len(outliers) > 0:
+            warnings.append(
+                f"⚠ {len(outliers)} plant visit(s) have dwell time > 5 days — likely parsing errors "
+                f"or cross-month trips. Review before using dwell metrics."
+            )
+
+    # 4. Manual vs computed trip count discrepancy
+    for month in df["month_name"].unique():
+        mdf = df[df["month_name"] == month]
+        manual = mdf[mdf["manual_trip_count"].notna()].groupby("vehicle")["manual_trip_count"].max().sum()
+        if manual == 0:
+            continue
+        if "is_trip" not in mdf.columns:
+            mdf = add_status_column(mdf)
+        computed = int(mdf["is_trip"].sum())
+        diff = computed - manual
+        pct = abs(diff) / manual * 100 if manual else 0
+        if pct > 10:
+            warnings.append(
+                f"⚠ {month}: computed trips ({computed}) differs from manual Trip column ({int(manual)}) "
+                f"by {diff:+d} ({pct:.1f}%). The manual count is authoritative."
+            )
+
+    return warnings
