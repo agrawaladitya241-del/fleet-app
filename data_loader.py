@@ -1,40 +1,43 @@
 """
 data_loader.py
 --------------
-Handles reading the fleet Excel file.
+Reads the multi-sheet fleet Excel file into tidy long-format DataFrames.
 
-The Excel file has one sheet per month (e.g., 'February', 'March', 'APRIL'),
-plus miscellaneous sheets we should ignore ('Sheet1', 'Detail1', etc.).
+Handles the messy reality of the source file:
+  - Multiple month sheets (February, March, APRIL) plus junk sheets to ignore.
+  - Date column headers in any of 4 formats:
+      1. Real datetime cells
+      2. Text like '01-Feb', '01.APRL', '5-Aril', '03-Aprl', '6 aprl'
+      3. Pure day numbers
+  - Plant-In/Out columns interleaved between date columns with messy content:
+      - Timestamps: 'in-16.03/11 AM\nout-17.03/12 AM', 'IN-24.03/04PM out-26.03/03PM'
+      - Service notes: 'Clutch Adjust & silencer Leak', 'TYRE REQUIR'
+      - Location flags: 'L POINT', 'T DUBURI'
+  - Hidden rows and hidden columns (openpyxl reads these by default — we keep that).
+  - Optional 'Trip' column at the end (March has it, April doesn't).
+  - Yellow-highlighted cells marking routes for analysis.
+  - Accident vehicles with 'ACCIDENT' / 'Accidental Work' tags.
 
-Each month sheet has:
-  - Meta columns: Sl No, Vehicle No, Model, Driver Name, Cont No
-  - Date columns: one per day of the month, headers are either datetime objects
-    (cleanest case) or text like '01-Feb', '01.APRL', '5-Aril', '03-Aprl'.
-  - Optional 'PLANT IN/OUT' columns interleaved between date columns (March sheet).
-  - Optional trailing meta columns: 'Total Trip count', 'Location', 'Time In'.
-
-This loader:
-  1. Identifies which sheets are actual month sheets (by name matching known months).
-  2. For each month sheet, identifies the date columns vs meta columns.
-  3. Returns a tidy (long-format) DataFrame: one row per (vehicle, day) with status.
+Output: two long-format DataFrames:
+  - daily_df:  one row per (vehicle, day) — status_raw + is_yellow + manual_trip_count
+  - plant_df:  one row per plant in/out event — parsed in_time, out_time, dwell_hours
 """
 
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, time
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 
 # ------------------------------------------------------------------
 # Month recognition
 # ------------------------------------------------------------------
 
-# Map sheet-name patterns to (month_number, display_name).
-# We match loosely because the sheets are named inconsistently (e.g. 'APRIL').
 _MONTH_PATTERNS = {
     "jan": (1, "January"),
     "feb": (2, "February"),
@@ -52,7 +55,6 @@ _MONTH_PATTERNS = {
 
 
 def _identify_month(sheet_name: str) -> Optional[Tuple[int, str]]:
-    """Return (month_number, display_name) if the sheet name looks like a month."""
     lower = sheet_name.strip().lower()
     for key, (num, name) in _MONTH_PATTERNS.items():
         if lower.startswith(key) or lower == key:
@@ -61,11 +63,8 @@ def _identify_month(sheet_name: str) -> Optional[Tuple[int, str]]:
 
 
 def list_month_sheets(file_path_or_buffer) -> List[Tuple[str, int, str]]:
-    """
-    Return a list of (sheet_name, month_number, display_name) for every sheet
-    in the workbook that looks like a month sheet, sorted by month number.
-    """
-    wb = load_workbook(file_path_or_buffer, read_only=True, data_only=True)
+    """Return (sheet_name, month_number, display_name) for each month sheet."""
+    wb = load_workbook(file_path_or_buffer, read_only=False, data_only=True)
     found = []
     for sheet_name in wb.sheetnames:
         match = _identify_month(sheet_name)
@@ -76,10 +75,9 @@ def list_month_sheets(file_path_or_buffer) -> List[Tuple[str, int, str]]:
 
 
 # ------------------------------------------------------------------
-# Header parsing
+# Header classification
 # ------------------------------------------------------------------
 
-# Column-name keywords we recognize as meta (not date) columns.
 _META_KEYWORDS = [
     "sl no", "sl.no", "serial",
     "vehicle", "truck",
@@ -88,38 +86,52 @@ _META_KEYWORDS = [
     "cont no", "contact", "phone",
     "total trip", "trip count",
     "location", "time in", "time out",
-    "plant in", "plant out", "plant in/out", "plant in /out",
+    "running km",
 ]
+
+_PLANT_KEYWORDS = ["plant in", "plant out", "plant/in", "plantin", "plnat in", "pplantin"]
+
+# Matches text-date headers like '01-Feb', '01.APRL', '5-Aril', '6 aprl'
+_DATE_TEXT_RE = re.compile(
+    r"^\s*(\d{1,2})[\s\-\.\/]\s*"
+    r"(jan|feb|mar|apr|apri|aprl|april|ari|aril|aprl|may|jun|jul|aug|sep|oct|nov|dec)",
+    re.IGNORECASE,
+)
 
 
 def _is_meta_header(value) -> bool:
-    if value is None:
-        return False
-    if not isinstance(value, str):
+    if value is None or not isinstance(value, str):
         return False
     lower = value.strip().lower()
     return any(kw in lower for kw in _META_KEYWORDS)
 
 
-# Matches date-like text headers: '01-Feb', '01.APRL', '5-Aril', '03-Aprl', '31.MAR'
-_DATE_TEXT_RE = re.compile(
-    r"^\s*(\d{1,2})[\s\-\.\/](?:jan|feb|mar|apr|apri|aprl|april|ari|may|jun|jul|aug|sep|oct|nov|dec)",
-    re.IGNORECASE,
-)
+def _is_plant_header(value) -> bool:
+    if value is None or not isinstance(value, str):
+        return False
+    lower = value.strip().lower().replace(" ", "").replace("/", "")
+    return any(kw.replace(" ", "").replace("/", "") in lower for kw in _PLANT_KEYWORDS)
+
+
+def _is_trip_column_header(value) -> bool:
+    """Detect the manual 'Trip' count column (March has this)."""
+    if value is None or not isinstance(value, str):
+        return False
+    v = value.strip().lower()
+    return v == "trip" or v == "trips" or "total trip" in v
+
+
+def _is_status_column_header(value) -> bool:
+    """Detect the 'status' column at end of sheets (not a date)."""
+    if value is None or not isinstance(value, str):
+        return False
+    return value.strip().lower() == "status"
 
 
 def _parse_date_header(value, fallback_year: int, fallback_month: int) -> Optional[datetime]:
-    """
-    Try to parse a header cell as a date. Returns a datetime or None.
-
-    - If value is already a datetime, return it as-is.
-    - If value is a string matching our date-text pattern, extract the day and
-      return datetime(fallback_year, fallback_month, day).
-    - If value is a plain number 1..31, treat as day in fallback month.
-    """
+    """Turn a header cell into a datetime if possible, else None."""
     if isinstance(value, datetime):
         return value
-
     if value is None:
         return None
 
@@ -136,20 +148,17 @@ def _parse_date_header(value, fallback_year: int, fallback_month: int) -> Option
             except ValueError:
                 return None
 
-    # Text date like '01-Feb', '05.APRL', '5-Aril', etc.
+    # Text date like '01-Feb', '05.APRL', '5-Aril', '6 aprl'
     m = _DATE_TEXT_RE.match(s)
     if m:
         day = int(m.group(1))
-        # Try to also extract the month abbreviation from the string
         month_match = re.search(
-            r"(jan|feb|mar|apr|apri|aprl|april|ari|may|jun|jul|aug|sep|oct|nov|dec)",
-            s,
-            re.IGNORECASE,
+            r"(jan|feb|mar|apr|apri|aprl|april|ari|aril|may|jun|jul|aug|sep|oct|nov|dec)",
+            s, re.IGNORECASE,
         )
         if month_match:
             abbr = month_match.group(1).lower()[:3]
-            # 'ari' is a typo for 'April' in your data — normalize it
-            if abbr == "ari":
+            if abbr in ("ari", "apr"):
                 abbr = "apr"
             for key, (num, _) in _MONTH_PATTERNS.items():
                 if key == abbr:
@@ -157,7 +166,6 @@ def _parse_date_header(value, fallback_year: int, fallback_month: int) -> Option
                         return datetime(fallback_year, num, day)
                     except ValueError:
                         return None
-        # Fallback to the sheet's month
         try:
             return datetime(fallback_year, fallback_month, day)
         except ValueError:
@@ -167,63 +175,186 @@ def _parse_date_header(value, fallback_year: int, fallback_month: int) -> Option
 
 
 # ------------------------------------------------------------------
-# Main loader
+# Fill color detection (for yellow = route)
+# ------------------------------------------------------------------
+
+def _is_yellow(cell) -> bool:
+    """Return True if the cell has a yellow-ish fill color."""
+    if cell is None or cell.fill is None or cell.fill.fgColor is None:
+        return False
+    color = cell.fill.fgColor.rgb if cell.fill.fgColor.type == "rgb" else cell.fill.fgColor.value
+    if not color or color == "00000000":
+        return False
+    color_str = str(color).upper()
+    # Yellow variants: FFFF00, FFFFFF00, FFFFC000 (amber), etc.
+    # We consider anything with 'FF' in red+green bytes and low blue as yellow.
+    # Simpler heuristic: contains 'FFFF00' or ends with 'FF00'.
+    if "FFFF00" in color_str:
+        return True
+    # Amber/orange is also used for routes in some sheets
+    if "FFC000" in color_str or "FFA500" in color_str:
+        return True
+    return False
+
+
+# ------------------------------------------------------------------
+# Plant In/Out timestamp parsing
+# ------------------------------------------------------------------
+
+# Patterns of "IN" and "OUT" timestamps we see in the data:
+#   'in-16.03/11 AM\nout-17.03/12 AM'
+#   'IN-24.03/04PM out-26.03/03PM'
+#   'in- 12.03(09 PM) Out- 13.03(07 AM)'
+#   '07.03(9.00PM)OUT-08.03(2.00PM)'
+#   '10.3 (4:18PM) 11.3 (2 AM)'
+#   'in-31.03/08 PM'    <-- no OUT
+
+_DT_PART = r"(\d{1,2})\s*[\.\/\-]\s*(\d{1,2})"   # day.month or day/month
+_TIME_PART = (
+    r"(\d{1,2})\s*[:\.]?\s*(\d{0,2})\s*"
+    r"(AM|PM|am|pm|A\.M\.|P\.M\.)?"
+)
+_IN_RE = re.compile(
+    rf"(?:in|IN)\s*[\-:]?\s*{_DT_PART}\s*[\s\/\(]?\s*{_TIME_PART}",
+    re.IGNORECASE,
+)
+_OUT_RE = re.compile(
+    rf"(?:out|OUT)\s*[\-:]?\s*{_DT_PART}\s*[\s\/\(]?\s*{_TIME_PART}",
+    re.IGNORECASE,
+)
+# Fallback: "7.03(9PM)" with no "in"/"out" keyword — just a date+time
+_BARE_DT_RE = re.compile(rf"{_DT_PART}\s*[\(\s\/]?\s*{_TIME_PART}")
+
+
+def _build_datetime(
+    day: int, month: int, year: int,
+    hour: int, minute: int, ampm: Optional[str]
+) -> Optional[datetime]:
+    try:
+        if ampm:
+            ampm = ampm.lower().replace(".", "")
+            if ampm.startswith("p") and hour < 12:
+                hour += 12
+            elif ampm.startswith("a") and hour == 12:
+                hour = 0
+        if hour > 23 or minute > 59:
+            return None
+        return datetime(year, month, day, hour, minute)
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_plant_inout(text: str, fallback_year: int) -> Dict:
+    """
+    Parse a plant in/out cell. Returns a dict with:
+      in_time, out_time, dwell_hours, note
+    Any of them may be None.
+    """
+    result = {"in_time": None, "out_time": None, "dwell_hours": None, "note": None}
+    if not text or not isinstance(text, str):
+        return result
+
+    # Normalize whitespace
+    s = text.strip().replace("\n", " ")
+
+    # If text contains no digits at all, it's a note (like "Clutch Adjust" or "L POINT")
+    if not re.search(r"\d", s):
+        result["note"] = s
+        return result
+
+    in_match = _IN_RE.search(s)
+    out_match = _OUT_RE.search(s)
+
+    if in_match:
+        d, mo, h, mn, ap = in_match.groups()
+        result["in_time"] = _build_datetime(
+            int(d), int(mo), fallback_year,
+            int(h), int(mn or 0), ap,
+        )
+
+    if out_match:
+        d, mo, h, mn, ap = out_match.groups()
+        result["out_time"] = _build_datetime(
+            int(d), int(mo), fallback_year,
+            int(h), int(mn or 0), ap,
+        )
+
+    # Fallback: if no IN/OUT keywords but two bare date+times, assume first=in, second=out
+    if not in_match and not out_match:
+        matches = list(_BARE_DT_RE.finditer(s))
+        if len(matches) >= 2:
+            d1, mo1, h1, mn1, ap1 = matches[0].groups()
+            d2, mo2, h2, mn2, ap2 = matches[1].groups()
+            result["in_time"] = _build_datetime(
+                int(d1), int(mo1), fallback_year, int(h1), int(mn1 or 0), ap1
+            )
+            result["out_time"] = _build_datetime(
+                int(d2), int(mo2), fallback_year, int(h2), int(mn2 or 0), ap2
+            )
+        elif len(matches) == 1:
+            d, mo, h, mn, ap = matches[0].groups()
+            result["in_time"] = _build_datetime(
+                int(d), int(mo), fallback_year, int(h), int(mn or 0), ap
+            )
+        else:
+            # Couldn't parse anything — stash as note
+            result["note"] = s
+
+    # Compute dwell
+    if result["in_time"] and result["out_time"]:
+        delta = result["out_time"] - result["in_time"]
+        hours = delta.total_seconds() / 3600.0
+        # Guard against negative or absurd values (parsing errors)
+        if 0 <= hours <= 24 * 14:
+            result["dwell_hours"] = round(hours, 2)
+
+    return result
+
+
+# ------------------------------------------------------------------
+# Core loader
 # ------------------------------------------------------------------
 
 def load_month_sheet(
     file_path_or_buffer,
     sheet_name: str,
     month_number: int,
-    year: Optional[int] = None,
-) -> pd.DataFrame:
+    year: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Load one month sheet into a tidy long-format DataFrame with columns:
-      vehicle, driver, contact, model, date, status_raw, month_name
-
-    Each row represents one vehicle on one day.
+    Load one month sheet. Returns two DataFrames:
+      daily_df: one row per (vehicle, day)
+      plant_df: one row per plant in/out cell (parsed)
     """
-    if year is None:
-        year = datetime.now().year
+    wb = load_workbook(file_path_or_buffer, data_only=True)
+    ws = wb[sheet_name]
 
-    # Read with pandas using openpyxl engine — give us raw cells
-    df_raw = pd.read_excel(
-        file_path_or_buffer,
-        sheet_name=sheet_name,
-        header=None,  # we handle headers manually
-        engine="openpyxl",
-    )
+    header_row_idx = 1
+    header_row = [ws.cell(row=header_row_idx, column=c).value for c in range(1, ws.max_column + 1)]
 
-    if df_raw.empty or df_raw.shape[0] < 2:
-        return pd.DataFrame(
-            columns=["vehicle", "driver", "contact", "model", "date", "status_raw", "month_name"]
-        )
-
-    header_row = df_raw.iloc[0].tolist()
-
-    # Classify each column
+    # Classify every column
     col_info: Dict[int, Dict] = {}
-    for col_idx, header_val in enumerate(header_row):
+    for col_idx_0, header_val in enumerate(header_row):
+        col_idx = col_idx_0 + 1  # 1-based
+        if _is_trip_column_header(header_val):
+            col_info[col_idx] = {"kind": "trip_count", "name": str(header_val).strip()}
+            continue
+        if _is_status_column_header(header_val):
+            col_info[col_idx] = {"kind": "status_text", "name": str(header_val).strip()}
+            continue
         if _is_meta_header(header_val):
             col_info[col_idx] = {"kind": "meta", "name": str(header_val).strip().lower()}
             continue
-
-        parsed_date = _parse_date_header(header_val, year, month_number)
-        if parsed_date is not None:
-            # Only accept if the parsed date is in the target month
-            # (this filters out stray columns like '01.APRL' appearing in March sheet
-            #  — we want those to stay visible in the April view, not the March view,
-            #  since they represent April data mistakenly placed in the March sheet;
-            #  we still keep them because some months span into the next).
-            col_info[col_idx] = {
-                "kind": "date",
-                "date": parsed_date,
-            }
+        if _is_plant_header(header_val):
+            col_info[col_idx] = {"kind": "plant", "name": str(header_val).strip()}
             continue
-
-        # Unknown headers are skipped silently
+        parsed = _parse_date_header(header_val, year, month_number)
+        if parsed is not None:
+            col_info[col_idx] = {"kind": "date", "date": parsed}
+            continue
         col_info[col_idx] = {"kind": "skip"}
 
-    # Find key meta columns by keyword in header text
+    # Locate key meta cols
     def find_meta_col(keywords: List[str]) -> Optional[int]:
         for idx, info in col_info.items():
             if info["kind"] != "meta":
@@ -239,94 +370,153 @@ def load_month_sheet(
     contact_col = find_meta_col(["cont no", "contact", "phone"])
     model_col = find_meta_col(["model"])
 
-    if vehicle_col is None:
-        # We can't do anything without a vehicle column
-        return pd.DataFrame(
-            columns=["vehicle", "driver", "contact", "model", "date", "status_raw", "month_name"]
-        )
+    # Locate the Trip count column if present
+    trip_count_col = next(
+        (idx for idx, info in col_info.items() if info["kind"] == "trip_count"),
+        None,
+    )
 
     date_cols = [(idx, info["date"]) for idx, info in col_info.items() if info["kind"] == "date"]
+    plant_cols = [(idx, info["name"]) for idx, info in col_info.items() if info["kind"] == "plant"]
 
-    # Build long-format records
-    records = []
-    month_display = _MONTH_PATTERNS.get(
-        [k for k, v in _MONTH_PATTERNS.items() if v[0] == month_number][0]
-    )[1]
+    if vehicle_col is None:
+        wb.close()
+        return pd.DataFrame(), pd.DataFrame()
 
-    # Iterate data rows (skip header row)
-    for row_idx in range(1, df_raw.shape[0]):
-        row = df_raw.iloc[row_idx]
+    # For each plant column, find the nearest preceding date column (so we can
+    # attribute the plant in/out event to the correct day).
+    plant_to_date = {}
+    for p_idx, _ in plant_cols:
+        nearest_date = None
+        for d_idx, d_date in date_cols:
+            if d_idx < p_idx:
+                nearest_date = d_date
+            else:
+                break
+        plant_to_date[p_idx] = nearest_date
 
-        vehicle_raw = row.iloc[vehicle_col] if vehicle_col is not None else None
-        if pd.isna(vehicle_raw) or str(vehicle_raw).strip() == "":
+    daily_records = []
+    plant_records = []
+    month_display = _MONTH_PATTERNS[next(k for k, v in _MONTH_PATTERNS.items() if v[0] == month_number)][1]
+
+    for row_idx in range(header_row_idx + 1, ws.max_row + 1):
+        vehicle_raw = ws.cell(row=row_idx, column=vehicle_col).value
+        if vehicle_raw is None:
             continue
-
         vehicle = str(vehicle_raw).strip().upper()
-        # Skip obvious junk rows like 'fd' in row 2 of some sheets
         if len(vehicle) < 3 or vehicle == "FD":
             continue
 
-        driver = (
-            str(row.iloc[driver_col]).strip()
-            if driver_col is not None and pd.notna(row.iloc[driver_col])
-            else ""
-        )
-        contact = (
-            str(row.iloc[contact_col]).strip()
-            if contact_col is not None and pd.notna(row.iloc[contact_col])
-            else ""
-        )
-        model = (
-            str(row.iloc[model_col]).strip()
-            if model_col is not None and pd.notna(row.iloc[model_col])
-            else ""
-        )
+        driver = ""
+        if driver_col is not None:
+            dv = ws.cell(row=row_idx, column=driver_col).value
+            if dv is not None:
+                driver = str(dv).strip()
 
-        for date_col_idx, the_date in date_cols:
-            cell_val = row.iloc[date_col_idx]
-            status_raw = ""
-            if pd.notna(cell_val):
-                status_raw = str(cell_val).strip()
+        contact = ""
+        if contact_col is not None:
+            cv = ws.cell(row=row_idx, column=contact_col).value
+            if cv is not None:
+                contact = str(cv).strip()
 
-            records.append({
+        model = ""
+        if model_col is not None:
+            mv = ws.cell(row=row_idx, column=model_col).value
+            if mv is not None:
+                model = str(mv).strip()
+
+        manual_trip = None
+        if trip_count_col is not None:
+            tv = ws.cell(row=row_idx, column=trip_count_col).value
+            if isinstance(tv, (int, float)):
+                manual_trip = int(tv)
+
+        # Daily cells
+        for d_idx, d_date in date_cols:
+            cell = ws.cell(row=row_idx, column=d_idx)
+            val = cell.value
+            status_raw = str(val).strip() if val is not None else ""
+            is_yellow = _is_yellow(cell) if status_raw else False
+
+            daily_records.append({
                 "vehicle": vehicle,
                 "driver": driver,
                 "contact": contact,
                 "model": model,
-                "date": the_date,
+                "date": d_date,
                 "status_raw": status_raw,
+                "is_yellow": is_yellow,
                 "month_name": month_display,
+                "manual_trip_count": manual_trip,
             })
 
-    return pd.DataFrame.from_records(records)
+        # Plant in/out cells
+        for p_idx, p_name in plant_cols:
+            val = ws.cell(row=row_idx, column=p_idx).value
+            if val is None:
+                continue
+            text = str(val).strip()
+            if not text:
+                continue
+            parsed = parse_plant_inout(text, fallback_year=year)
+            attributed_date = plant_to_date.get(p_idx)
+            plant_records.append({
+                "vehicle": vehicle,
+                "date": attributed_date,
+                "month_name": month_display,
+                "raw_text": text,
+                "in_time": parsed["in_time"],
+                "out_time": parsed["out_time"],
+                "dwell_hours": parsed["dwell_hours"],
+                "note": parsed["note"],
+            })
+
+    wb.close()
+
+    daily_df = pd.DataFrame.from_records(daily_records)
+    plant_df = pd.DataFrame.from_records(plant_records)
+    return daily_df, plant_df
 
 
-def load_all_months(file_path_or_buffer, year: Optional[int] = None) -> pd.DataFrame:
+def load_all_months(
+    file_path_or_buffer,
+    year: Optional[int] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Load every month sheet in the workbook into a single tidy DataFrame.
-    Returns concatenated long-format data with one row per (vehicle, day).
+    Load every month sheet. Returns (daily_df, plant_df) concatenated across months.
     """
+    if year is None:
+        year = datetime.now().year
+
     months = list_month_sheets(file_path_or_buffer)
-    all_frames = []
+    all_daily = []
+    all_plant = []
     for sheet_name, month_num, _display in months:
-        frame = load_month_sheet(file_path_or_buffer, sheet_name, month_num, year=year)
-        if not frame.empty:
-            all_frames.append(frame)
+        d, p = load_month_sheet(file_path_or_buffer, sheet_name, month_num, year=year)
+        if not d.empty:
+            all_daily.append(d)
+        if not p.empty:
+            all_plant.append(p)
 
-    if not all_frames:
-        return pd.DataFrame(
-            columns=["vehicle", "driver", "contact", "model", "date", "status_raw", "month_name"]
-        )
+    if not all_daily:
+        return pd.DataFrame(), pd.DataFrame()
 
-    combined = pd.concat(all_frames, ignore_index=True)
-    # Deduplicate in case a date appears in two sheets (e.g. '01.APRL' in both March and April)
-    # Keep the row from the sheet whose month matches the date's month when possible.
-    combined["_date_month"] = combined["date"].dt.month
-    combined["_month_match"] = combined.apply(
-        lambda r: r["_date_month"] == _MONTH_PATTERNS[r["month_name"][:3].lower()][0],
-        axis=1,
+    daily = pd.concat(all_daily, ignore_index=True)
+    plant = pd.concat(all_plant, ignore_index=True) if all_plant else pd.DataFrame()
+
+    # Deduplicate daily: if the same (vehicle, date) appears in two sheets
+    # (e.g. April 1 in both March and April sheets), keep the row whose sheet
+    # matches the cell's month.
+    daily["_date_month"] = daily["date"].dt.month
+    daily["_sheet_month"] = daily["month_name"].str[:3].str.lower().map(
+        {k: v[0] for k, v in _MONTH_PATTERNS.items()}
     )
-    combined = combined.sort_values(by=["vehicle", "date", "_month_match"], ascending=[True, True, False])
-    combined = combined.drop_duplicates(subset=["vehicle", "date"], keep="first")
-    combined = combined.drop(columns=["_date_month", "_month_match"])
-    return combined.reset_index(drop=True)
+    daily["_match"] = daily["_date_month"] == daily["_sheet_month"]
+    daily = daily.sort_values(
+        ["vehicle", "date", "_match"], ascending=[True, True, False]
+    )
+    daily = daily.drop_duplicates(subset=["vehicle", "date"], keep="first")
+    daily = daily.drop(columns=["_date_month", "_sheet_month", "_match"])
+    daily = daily.reset_index(drop=True)
+
+    return daily, plant
