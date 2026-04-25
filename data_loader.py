@@ -340,6 +340,22 @@ def load_month_sheet(
             col_info[col_idx] = {"kind": "trip_count", "name": str(header_val).strip()}
             continue
         if _is_status_column_header(header_val):
+            # Peek at the column's actual values. If they're mostly numeric,
+            # treat as trip_count (April uses 'status' header for trip counts).
+            # Otherwise treat as descriptive status_text.
+            sample_vals = [
+                ws.cell(row=r, column=col_idx).value
+                for r in range(2, min(ws.max_row + 1, 50))
+            ]
+            non_null = [v for v in sample_vals if v is not None and str(v).strip() != ""]
+            if non_null:
+                numeric_count = sum(
+                    1 for v in non_null
+                    if isinstance(v, (int, float)) and not isinstance(v, bool)
+                )
+                if numeric_count / len(non_null) >= 0.7:
+                    col_info[col_idx] = {"kind": "trip_count", "name": str(header_val).strip()}
+                    continue
             col_info[col_idx] = {"kind": "status_text", "name": str(header_val).strip()}
             continue
         if _is_meta_header(header_val):
