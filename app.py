@@ -139,7 +139,10 @@ CSS = """
 
   .stAlert { background: #11141a; border: 1px solid #1f2328; border-radius: 6px; }
 
-  #MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; }
+  /* Hide footer only. Keep the header visible so users can re-open the sidebar
+     after collapsing it. */
+  footer { visibility: hidden; }
+  header[data-testid="stHeader"] { background: transparent; }
 
   /* Custom warning/info boxes */
   .note-box {
@@ -313,43 +316,64 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+st.markdown("### Top-line metrics")
 k1, k2, k3, k4, k5 = st.columns(5)
 with k1:
+    is_manual = daily["manual_trip_count"].notna().any()
+    sub = "from Excel column" if is_manual else "heuristic — TSK/TSM/JSPL"
+    st.markdown(
+        kpi_card("Total trips", f"{kpis['total_trips_month']:,}", accent="green", sub=sub),
+        unsafe_allow_html=True,
+    )
+with k2:
+    st.markdown(
+        kpi_card("Avg days / trip", kpis.get("avg_days_per_trip", 0), accent="blue",
+                 sub="working days ÷ trips"),
+        unsafe_allow_html=True,
+    )
+with k3:
+    st.markdown(
+        kpi_card("Fleet utilization", kpis["fleet_util_pct"], unit="%", accent="blue",
+                 sub="excl. accident, R&M, DP"),
+        unsafe_allow_html=True,
+    )
+with k4:
+    st.markdown(
+        kpi_card("Accident vehicles", kpis["accident_vehicles"], accent="purple",
+                 sub="grounded for month"),
+        unsafe_allow_html=True,
+    )
+with k5:
     st.markdown(
         kpi_card("Active trips today", kpis["active_trips"], accent="green",
                  sub=f"of {kpis['total_vehicles']} vehicles"),
         unsafe_allow_html=True,
     )
-with k2:
-    st.markdown(
-        kpi_card("Drivers home", kpis["drivers_home"], accent="red"),
-        unsafe_allow_html=True,
-    )
-with k3:
-    st.markdown(
-        kpi_card("Waiting / idle", kpis["idle_waiting"], accent="amber"),
-        unsafe_allow_html=True,
-    )
-with k4:
-    st.markdown(
-        kpi_card("Fleet utilization", kpis["fleet_util_pct"], unit="%", accent="blue",
-                 sub="excl. accident vehicles"),
-        unsafe_allow_html=True,
-    )
-with k5:
-    st.markdown(
-        kpi_card("Accident vehicles", kpis["accident_vehicles"], accent="purple",
-                 sub="grounded fleet"),
-        unsafe_allow_html=True,
-    )
 
-# Show total trips separately below
-tt_col1, _ = st.columns([1, 4])
-with tt_col1:
-    is_manual = daily["manual_trip_count"].notna().any()
-    sub = "from Excel Trip column" if is_manual else "heuristic — TSK/TSM/JSPL routes"
+st.markdown("### Day breakdown for this period")
+d1, d2, d3, d4 = st.columns(4)
+with d1:
     st.markdown(
-        kpi_card("Total trips this view", f"{kpis['total_trips_month']:,}", sub=sub),
+        kpi_card("DH days", kpis["dh_days_month"], accent="red",
+                 sub="Driver Home (total this month)"),
+        unsafe_allow_html=True,
+    )
+with d2:
+    st.markdown(
+        kpi_card("DP days", kpis["dp_days_month"], accent="red",
+                 sub="Driver Problem (total this month)"),
+        unsafe_allow_html=True,
+    )
+with d3:
+    st.markdown(
+        kpi_card("Maintenance days", kpis["maintenance_days_month"], accent="purple",
+                 sub="RM/repair (total this month)"),
+        unsafe_allow_html=True,
+    )
+with d4:
+    st.markdown(
+        kpi_card("Parking days", kpis["parking_days_month"], accent="amber",
+                 sub="vehicle parked (total this month)"),
         unsafe_allow_html=True,
     )
 
@@ -467,6 +491,54 @@ with tab_vehicles:
                     "is_accident_vehicle": st.column_config.CheckboxColumn("Accident"),
                 },
             )
+
+        st.markdown("## Day breakdown per vehicle")
+        note(
+            "How many days each vehicle spent in each unproductive state. "
+            "Filter by clicking the column headers to sort. "
+            "<strong>DH</strong> = Driver Home · <strong>DP</strong> = Driver Problem · "
+            "<strong>MAINTENANCE</strong> = repair/RM · <strong>PARK</strong> = parked.",
+            "info",
+        )
+        breakdown_cols = ["vehicle", "driver", "DH", "DP", "MAINTENANCE", "PARK",
+                          "ACCIDENT", "trips_computed", "trips_manual", "active_days",
+                          "utilization_pct"]
+        breakdown_cols = [c for c in breakdown_cols if c in vs_main.columns]
+        breakdown_df = vs_main[breakdown_cols].copy()
+        # Sort by total unproductive days
+        breakdown_df["_unprod"] = (
+            breakdown_df.get("DH", 0) + breakdown_df.get("DP", 0)
+            + breakdown_df.get("MAINTENANCE", 0) + breakdown_df.get("PARK", 0)
+        )
+        breakdown_df = breakdown_df.sort_values("_unprod", ascending=False).drop(columns=["_unprod"])
+        st.dataframe(
+            breakdown_df, use_container_width=True, hide_index=True,
+            column_config={
+                "utilization_pct": st.column_config.ProgressColumn(
+                    "Utilization %", min_value=0, max_value=100, format="%.1f%%"),
+            },
+        )
+
+        # ---- Trip count reconciliation ----
+        rec = analytics.trip_reconciliation(daily)
+        if not rec.empty:
+            st.markdown("## Trip count reconciliation: manual vs computed")
+            exact = (rec["diff"] == 0).sum()
+            within1 = (rec["diff"].abs() <= 1).sum()
+            off2plus = (rec["diff"].abs() > 1).sum()
+            total_manual = int(rec["trips_manual"].sum())
+            total_computed = int(rec["trips_computed"].sum())
+            note(
+                f"Comparing the manual trip count from the Excel sheet against our "
+                f"computed count (cells starting with TSK/TSM/JSPL). "
+                f"<strong>{exact}</strong> exact matches · <strong>{within1}</strong> within ±1 · "
+                f"<strong>{off2plus}</strong> off by 2+. "
+                f"Fleet total: manual <strong>{total_manual}</strong> vs computed <strong>{total_computed}</strong>. "
+                f"Vehicles with the largest discrepancies are listed first — these are most likely "
+                f"data entry errors or genuine cells our heuristic missed.",
+                "info" if off2plus < 20 else "danger",
+            )
+            st.dataframe(rec, use_container_width=True, hide_index=True)
 
         st.markdown("## All vehicles")
         st.dataframe(
