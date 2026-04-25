@@ -15,7 +15,7 @@ Status taxonomy:
   MT       - Empty Truck Movement
   TRIP     - Active laden trip (origin-destination route, esp. TSK/TSM/JSPL prefix)
   ACCIDENT - Vehicle grounded due to accident
-  SERVICE  - Vehicle grounded for service/repair (tyre, clutch, engine, etc.)
+  MAINTENANCE - Vehicle grounded for repair (RM tag in Tata Steel; clutch, tyre, engine, etc.)
   NO_DATA  - Empty cell
 
 Trip counting:
@@ -48,11 +48,14 @@ _RE_MT = re.compile(r"\bmt\b", re.IGNORECASE)
 # Accident: explicit ACCIDENT or "Accidental Work"
 _RE_ACCIDENT = re.compile(r"\baccident", re.IGNORECASE)
 
-# Service/repair: mechanical/maintenance notes
-_RE_SERVICE = re.compile(
+# Repair & Maintenance — covers two cases:
+#  1. The literal "RM" code anywhere in the cell (Tata Steel convention: RM = Repair)
+#  2. Mechanical descriptions (clutch, tyre, engine, silencer, etc.)
+_RE_RM_TAG = re.compile(r"\bRM\b", re.IGNORECASE)
+_RE_MAINTENANCE = re.compile(
     r"\b(clutch|tyre|tire|engine|silencer|brake|broken|damage|repair|breakdown|"
     r"break\s*down|starting\s*issue|trolly\s*pati|gadi\s*broken|leak|adjust|"
-    r"overhaul)\b",
+    r"overhaul|workshop|maintenance|maintainance|maintaninance|service)\b",
     re.IGNORECASE,
 )
 
@@ -75,13 +78,13 @@ _RE_ROUTE = re.compile(
 # ------------------------------------------------------------------
 
 STATUS_ORDER = [
-    "ACCIDENT", "SERVICE", "DH", "DP", "LP", "PARK", "WAIT",
+    "ACCIDENT", "MAINTENANCE", "DH", "DP", "LP", "PARK", "WAIT",
     "TNST", "UL", "MT", "TRIP", "NO_DATA",
 ]
 
 STATUS_LABELS = {
     "ACCIDENT": "Accident",
-    "SERVICE": "In Service",
+    "MAINTENANCE": "Repair & Maintenance",
     "DH": "Driver Home",
     "DP": "Driver Problem",
     "LP": "Loading Point",
@@ -95,23 +98,30 @@ STATUS_LABELS = {
 }
 
 STATUS_COLORS = {
-    "TRIP": "#22c55e",       # green — productive
-    "UL": "#16a34a",         # darker green
-    "TNST": "#eab308",       # yellow — in progress
-    "LP": "#f59e0b",         # amber
-    "MT": "#fbbf24",         # light amber
-    "WAIT": "#f97316",       # orange
-    "PARK": "#fb923c",       # light orange
-    "DH": "#ef4444",         # red — unproductive
-    "DP": "#dc2626",         # dark red
-    "SERVICE": "#a855f7",    # purple — repair
-    "ACCIDENT": "#7c3aed",   # dark purple
-    "NO_DATA": "#4b5563",    # gray
+    "TRIP": "#22c55e",
+    "UL": "#16a34a",
+    "TNST": "#eab308",
+    "LP": "#f59e0b",
+    "MT": "#fbbf24",
+    "WAIT": "#f97316",
+    "PARK": "#fb923c",
+    "DH": "#ef4444",
+    "DP": "#dc2626",
+    "MAINTENANCE": "#a855f7",
+    "ACCIDENT": "#7c3aed",
+    "NO_DATA": "#4b5563",
 }
 
-
 def classify_status(cell: str) -> str:
-    """Classify one status cell. Precedence: ACCIDENT > SERVICE > DH > DP > LP > PARK > WAIT > TNST > UL > MT > TRIP."""
+    """
+    Classify one status cell.
+
+    Precedence: ACCIDENT > MAINTENANCE > DH > DP > LP > PARK > WAIT > TNST > UL > MT > TRIP.
+
+    MAINTENANCE catches:
+      - The literal "RM" code anywhere (Tata Steel: RM = Repair & Maintenance)
+      - Mechanical descriptors (clutch, tyre, engine, silencer, etc.)
+    """
     if cell is None:
         return "NO_DATA"
     text = str(cell).strip()
@@ -120,8 +130,8 @@ def classify_status(cell: str) -> str:
 
     if _RE_ACCIDENT.search(text):
         return "ACCIDENT"
-    if _RE_SERVICE.search(text):
-        return "SERVICE"
+    if _RE_RM_TAG.search(text) or _RE_MAINTENANCE.search(text):
+        return "MAINTENANCE"
     if _RE_DH.search(text):
         return "DH"
     if _RE_DP.search(text):
@@ -147,20 +157,19 @@ def add_status_column(df: pd.DataFrame) -> pd.DataFrame:
     A cell counts as a trip only if:
       - It starts with TSK-, TSM-, or JSPL- followed by a destination
       - AND the destination is not a waiting-state keyword (WT, WAIT, etc.)
-      - AND the cell isn't classified as WAIT/PARK/LP/ACCIDENT/SERVICE/DH/DP
+      - AND the cell isn't classified as WAIT/PARK/LP/ACCIDENT/MAINTENANCE/DH/DP
     """
     out = df.copy()
     out["status"] = out["status_raw"].apply(classify_status)
 
     def _is_trip(text, status):
-        if status in {"WAIT", "PARK", "LP", "ACCIDENT", "SERVICE", "DH", "DP", "NO_DATA"}:
+        if status in {"WAIT", "PARK", "LP", "ACCIDENT", "MAINTENANCE", "DH", "DP", "NO_DATA"}:
             return False
         if not text:
             return False
         m = _RE_TRIP_PREFIX.match(str(text).strip())
         if not m:
             return False
-        # Reject if destination starts with WT / WAIT / PARK / etc.
         dest = m.group(2).strip().upper()
         bad_dest_prefixes = ("WT", "WAIT", "PARK", "LOADING", "L POINT", "DH", "DP")
         if any(dest.startswith(p) for p in bad_dest_prefixes):
@@ -312,7 +321,8 @@ def identify_accident_vehicles(
 
 PRODUCTIVE_STATES = {"TRIP", "UL", "TNST", "LP", "MT"}
 # States that EXCLUDE a vehicle-day from utilization denominator entirely:
-EXCLUDED_FROM_DENOM = {"NO_DATA", "ACCIDENT"}
+# (truck isn't "available to do work" on these days)
+EXCLUDED_FROM_DENOM = {"NO_DATA", "ACCIDENT", "MAINTENANCE"}
 
 
 def _utilization_pct(s: pd.Series, row_sum_cols: List[str]) -> float:
@@ -484,6 +494,9 @@ def compute_kpis(df: pd.DataFrame) -> Dict:
             "idle_waiting": 0, "fleet_util_pct": 0.0,
             "accident_vehicles": 0, "latest_date": None,
             "total_trips_month": 0,
+            "dh_days_month": 0, "dp_days_month": 0,
+            "maintenance_days_month": 0, "parking_days_month": 0,
+            "avg_days_per_trip": 0.0, "working_days_total": 0,
         }
     df = df if "status" in df.columns else add_status_column(df)
     latest_date = df["date"].max()
@@ -493,6 +506,12 @@ def compute_kpis(df: pd.DataFrame) -> Dict:
     active_trips = int(latest["status"].isin(["TRIP", "UL"]).sum())
     drivers_home = int((latest["status"] == "DH").sum())
     idle_waiting = int(latest["status"].isin(["WAIT", "PARK"]).sum())
+
+    # Monthly totals (sum across all vehicles + all days in this view)
+    dh_days_month = int((df["status"] == "DH").sum())
+    dp_days_month = int((df["status"] == "DP").sum())
+    maintenance_days_month = int((df["status"] == "MAINTENANCE").sum())
+    parking_days_month = int((df["status"] == "PARK").sum())
 
     # Utilization excluding accident-grounded vehicles
     vs = vehicle_summary(df, exclude_accident_vehicles=True)
@@ -505,10 +524,19 @@ def compute_kpis(df: pd.DataFrame) -> Dict:
     else:
         fleet_util = 0.0
 
-    # Total trips: prefer manual count if available for this selection
+    # Total trips: only use manual if EVERY vehicle has it; else fallback to computed
+    # so the Total Trips KPI and Avg Days/Trip stay internally consistent.
     manual_total = df[df["manual_trip_count"].notna()].groupby("vehicle")["manual_trip_count"].max().sum()
     computed_total = int(df["is_trip"].sum()) if "is_trip" in df.columns else 0
-    total_trips_month = int(manual_total) if manual_total > 0 else computed_total
+    vehicles_in_view = df["vehicle"].nunique()
+    vehicles_with_manual = df[df["manual_trip_count"].notna()]["vehicle"].nunique()
+    all_have_manual = vehicles_with_manual == vehicles_in_view and manual_total > 0
+    total_trips_month = int(manual_total) if all_have_manual else computed_total
+
+    # Working days = cells NOT in {NO_DATA, ACCIDENT, MAINTENANCE, DP}
+    working_excluded = EXCLUDED_FROM_DENOM | {"DP"}
+    working_days = int((~df["status"].isin(working_excluded)).sum())
+    avg_days_per_trip = round(working_days / total_trips_month, 2) if total_trips_month > 0 else 0.0
 
     return {
         "total_vehicles": total_vehicles,
@@ -519,6 +547,12 @@ def compute_kpis(df: pd.DataFrame) -> Dict:
         "accident_vehicles": accident_count,
         "latest_date": latest_date,
         "total_trips_month": total_trips_month,
+        "dh_days_month": dh_days_month,
+        "dp_days_month": dp_days_month,
+        "maintenance_days_month": maintenance_days_month,
+        "parking_days_month": parking_days_month,
+        "avg_days_per_trip": avg_days_per_trip,
+        "working_days_total": working_days,
     }
 
 
@@ -610,6 +644,49 @@ def status_detail(df: pd.DataFrame, vehicle: str, status: str) -> pd.DataFrame:
 # ------------------------------------------------------------------
 # Search (Excel-Find equivalent)
 # ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# Trip count reconciliation: manual (Excel) vs computed (heuristic)
+# ------------------------------------------------------------------
+
+def trip_reconciliation(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    For every vehicle that has a manual trip count in the Excel sheet, return:
+      vehicle, trips_manual, trips_computed, diff (computed - manual)
+    Sorted by absolute diff descending so worst mismatches surface first.
+    """
+    if df.empty:
+        return pd.DataFrame()
+    df = df if "status" in df.columns else add_status_column(df)
+
+    # Per-vehicle manual count (one value per vehicle per month, take max)
+    manual_per_v = (
+        df[df["manual_trip_count"].notna()]
+        .groupby("vehicle")["manual_trip_count"].max()
+    )
+    if manual_per_v.empty:
+        return pd.DataFrame()
+
+    # Per-vehicle computed trip count
+    computed_per_v = df.groupby("vehicle")["is_trip"].sum().astype(int)
+
+    # Driver name (latest non-empty)
+    driver_per_v = (
+        df[df["driver"].astype(str).str.strip() != ""]
+        .sort_values("date").groupby("vehicle")["driver"].last()
+    )
+
+    out = pd.DataFrame({
+        "vehicle": manual_per_v.index,
+        "driver": [driver_per_v.get(v, "") for v in manual_per_v.index],
+        "trips_manual": manual_per_v.values.astype(int),
+        "trips_computed": [computed_per_v.get(v, 0) for v in manual_per_v.index],
+    })
+    out["diff"] = out["trips_computed"] - out["trips_manual"]
+    out["abs_diff"] = out["diff"].abs()
+    out = out.sort_values("abs_diff", ascending=False).drop(columns=["abs_diff"])
+    return out.reset_index(drop=True)
+
 
 def search_cells(df: pd.DataFrame, query: str, case_sensitive: bool = False) -> pd.DataFrame:
     """Return every daily cell whose status_raw matches the query."""
