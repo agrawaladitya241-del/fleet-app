@@ -266,7 +266,66 @@ def make_css(p: dict) -> str:
     background: transparent !important;
   }}
 
+  /* ---- Dataframe / Data table (Glide DataGrid) ---- */
   .stDataFrame {{ border: 1px solid {p['border']}; border-radius: 6px; }}
+  /* The actual data grid */
+  .stDataFrame [data-testid="stDataFrameResizable"],
+  .stDataFrame > div,
+  div[data-testid="stDataFrame"] > div,
+  div[data-testid="stDataFrameResizable"] {{
+    background-color: {p['panel']} !important;
+  }}
+  /* Cells, header cells, and grid canvas */
+  .stDataFrame canvas {{
+    background-color: {p['panel']} !important;
+  }}
+  /* The toolbar above the dataframe (search, download, fullscreen icons) */
+  div[data-testid="stElementToolbar"],
+  div[data-testid="stElementToolbarButton"] {{
+    background-color: {p['panel']} !important;
+    color: {p['text']} !important;
+    border-color: {p['border']} !important;
+  }}
+  div[data-testid="stElementToolbarButton"] svg {{
+    fill: {p['text']} !important;
+    color: {p['text']} !important;
+  }}
+  /* The "Show/hide columns" tooltip popover */
+  div[role="tooltip"], div[data-testid="stTooltip"] {{
+    background-color: {p['panel']} !important;
+    color: {p['text']} !important;
+    border: 1px solid {p['border']} !important;
+  }}
+  /* Hover/click popovers globally */
+  div[data-baseweb="tooltip"] {{
+    background-color: {p['panel']} !important;
+    color: {p['text']} !important;
+    border: 1px solid {p['border']} !important;
+  }}
+  /* Tables (st.table fallback) */
+  table {{ background-color: {p['panel']} !important; color: {p['text']} !important; }}
+  table th {{ background-color: {p['alert_bg']} !important; color: {p['text']} !important; border-color: {p['border']} !important; }}
+  table td {{ background-color: {p['panel']} !important; color: {p['text']} !important; border-color: {p['border']} !important; }}
+
+  /* ---- Expanders ---- */
+  details[data-testid="stExpander"] {{
+    background-color: {p['panel']} !important;
+    border: 1px solid {p['border']} !important;
+    border-radius: 6px;
+  }}
+  details[data-testid="stExpander"] summary {{
+    color: {p['text']} !important;
+    background-color: {p['panel']} !important;
+  }}
+
+  /* ---- Code blocks ---- */
+  code, pre {{ background-color: {p['alert_bg']} !important; color: {p['text']} !important; }}
+
+  /* ---- Markdown links ---- */
+  a {{ color: {p['accent_blue']} !important; }}
+
+  /* ---- Caption / help text ---- */
+  small, .caption, [data-testid="stCaptionContainer"] {{ color: {p['text_muted']} !important; }}
 
   [data-testid="stFileUploader"] section {{
     background: {p['panel']};
