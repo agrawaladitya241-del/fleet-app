@@ -188,6 +188,71 @@ def make_css(p: dict) -> str:
   section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {{ color: {p['h2']}; }}
   section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p {{ color: {p['text']}; }}
 
+  /* ---- Input widgets (selectbox, multiselect, number_input, text_input) ---- */
+  /* Selectbox + multiselect closed state */
+  div[data-baseweb="select"] > div {{
+    background-color: {p['panel']} !important;
+    border-color: {p['border']} !important;
+    color: {p['text']} !important;
+  }}
+  div[data-baseweb="select"] span,
+  div[data-baseweb="select"] input {{
+    color: {p['text']} !important;
+  }}
+  /* Selectbox dropdown menu (the popover when you click) */
+  div[data-baseweb="popover"] ul,
+  div[data-baseweb="popover"] li {{
+    background-color: {p['panel']} !important;
+    color: {p['text']} !important;
+  }}
+  div[data-baseweb="popover"] li:hover {{
+    background-color: {p['alert_bg']} !important;
+  }}
+  /* Multiselect chips (selected items) */
+  span[data-baseweb="tag"] {{
+    background-color: {p['accent_blue']} !important;
+    color: #ffffff !important;
+  }}
+  /* Number input + text input fields */
+  input[type="number"], input[type="text"],
+  div[data-baseweb="input"] input,
+  div[data-baseweb="base-input"] input {{
+    background-color: {p['panel']} !important;
+    color: {p['text']} !important;
+    border-color: {p['border']} !important;
+  }}
+  div[data-baseweb="input"], div[data-baseweb="base-input"] {{
+    background-color: {p['panel']} !important;
+    border-color: {p['border']} !important;
+  }}
+  /* Number input +/- buttons */
+  button[data-testid="stNumberInputStepDown"],
+  button[data-testid="stNumberInputStepUp"] {{
+    background-color: {p['panel']} !important;
+    color: {p['text']} !important;
+    border-color: {p['border']} !important;
+  }}
+  /* Date input */
+  div[data-baseweb="calendar"] {{
+    background-color: {p['panel']} !important;
+    color: {p['text']} !important;
+  }}
+  /* Generic Streamlit buttons (incl. our theme toggle) */
+  div[data-testid="stButton"] > button {{
+    background-color: {p['panel']} !important;
+    color: {p['text']} !important;
+    border: 1px solid {p['border']} !important;
+  }}
+  div[data-testid="stButton"] > button:hover {{
+    border-color: {p['accent_blue']} !important;
+    color: {p['accent_blue']} !important;
+  }}
+  /* Checkbox + radio */
+  label[data-baseweb="checkbox"] span,
+  label[data-baseweb="radio"] span {{
+    color: {p['text']} !important;
+  }}
+
   /* Tabs */
   .stTabs [data-baseweb="tab-list"] {{ gap: 0; border-bottom: 1px solid {p['border']}; overflow-x: auto; }}
   .stTabs [data-baseweb="tab"] {{
