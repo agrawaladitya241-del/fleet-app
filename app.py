@@ -317,33 +317,38 @@ st.markdown(
 )
 
 st.markdown("### Top-line metrics")
-k1, k2, k3, k4, k5 = st.columns(5)
+k1, k2, k3, k4, k5, k6 = st.columns(6)
 with k1:
-    is_manual = daily["manual_trip_count"].notna().any()
-    sub = "from Excel column" if is_manual else "heuristic — TSK/TSM/JSPL"
     st.markdown(
-        kpi_card("Total trips", f"{kpis['total_trips_month']:,}", accent="green", sub=sub),
+        kpi_card("Trips (manual)", f"{kpis['trips_manual_total']:,}", accent="green",
+                 sub="from Excel Trip/Status col"),
         unsafe_allow_html=True,
     )
 with k2:
+    st.markdown(
+        kpi_card("Trips (computed)", f"{kpis['trips_computed_total']:,}", accent="green",
+                 sub="TSK/TSM/JSPL heuristic"),
+        unsafe_allow_html=True,
+    )
+with k3:
     st.markdown(
         kpi_card("Avg days / trip", kpis.get("avg_days_per_trip", 0), accent="blue",
                  sub="working days ÷ trips"),
         unsafe_allow_html=True,
     )
-with k3:
+with k4:
     st.markdown(
         kpi_card("Fleet utilization", kpis["fleet_util_pct"], unit="%", accent="blue",
                  sub="excl. accident, R&M, DP"),
         unsafe_allow_html=True,
     )
-with k4:
+with k5:
     st.markdown(
         kpi_card("Accident vehicles", kpis["accident_vehicles"], accent="purple",
                  sub="grounded for month"),
         unsafe_allow_html=True,
     )
-with k5:
+with k6:
     st.markdown(
         kpi_card("Active trips today", kpis["active_trips"], accent="green",
                  sub=f"of {kpis['total_vehicles']} vehicles"),
